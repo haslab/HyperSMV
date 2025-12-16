@@ -1,0 +1,130 @@
+cabal-version:      3.6
+name:               hypersmv
+version:            0.1.0.0
+synopsis:
+
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Anonymous
+maintainer:         someone@icse.com
+copyright:          (c) 2025 Anonymous
+
+category:           Language
+
+library
+    hs-source-dirs: src
+    build-depends:
+        base, mtl, transformers,
+        intern, hashable, safe, digits, mwc-random >= 0.15, random, primitive,
+        split, text, bytestring, parsec, prettyprinter,
+        directory, filepath, temporary, shelly, process,
+        crypton,
+        heaps, hashtables, array, keys, containers, unordered-containers, vector, vector-instances, massiv, bitvec
+    build-tool-depends:
+        alex:alex,
+        happy:happy
+    exposed-modules:
+        Alloy.Pretty
+        Alloy.Syntax
+        Data.DT
+        Data.DD
+        Data.DDs
+        Data.IDD.Internal
+        Data.IDD
+        Data.BDD.Internal
+        Data.BDD
+        Error
+        ExplicitState.Eval
+        ExplicitState.Parser
+        ExplicitState.Pretty
+        ExplicitState.Product
+        ExplicitState.Syntax
+        ExplicitState.AutoHyper
+        HOA.Parser
+        HOA.Syntax
+        HOA.LTL
+        Location
+        Parser
+        Pretty
+        QCIR.Parser
+        QCIR.Pretty
+        QCIR.Syntax
+        QCIR.Solver
+        Smv.Lexer
+        Smv.Packed
+        Smv.Parser
+        Smv.Pretty
+        Smv.Solver
+        Smv.Syntax
+        Smv.Typing
+        Smv.Trace
+        Transform.Bexpr.Internal
+        Transform.Bexpr
+        Transform.Bpacked
+        Transform.Bproduct
+        Transform.CSE
+        Transform.DDpacked
+        Transform.DDs
+        Transform.DT.Expr
+        Transform.Exhaustive
+        Transform.Minimize
+        Transform.Normalize
+        Transform.Pexpr
+        Transform.Rename
+        Transform.Smv
+        Transform.SmvToAlloy
+        Transform.SmvToExplicitState
+        Transform.SmvToQBF
+        Transform.Split
+        Transform.Substitute
+        Utils
+    default-language: Haskell2010
+    default-extensions:
+        RankNTypes
+        DataKinds
+        DeriveDataTypeable
+        DeriveFoldable
+        DeriveTraversable
+        DeriveFunctor
+        DeriveGeneric
+        GeneralizedNewtypeDeriving
+        OverloadedStrings
+        ExtendedDefaultRules
+        TupleSections
+        ViewPatterns
+        ScopedTypeVariables
+        MultiParamTypeClasses
+        FlexibleContexts
+        FlexibleInstances
+        UndecidableInstances
+        TypeFamilies
+        PatternSynonyms
+        TypeApplications
+        TypeFamilyDependencies
+        FunctionalDependencies
+        ConstraintKinds
+        QuantifiedConstraints
+    ghc-options: -w
+
+executable hypersmv
+    hs-source-dirs: .
+    main-is: Main.hs
+    build-depends:
+        base, cmdargs, clock,
+        mtl, transformers, containers, keys,
+        text, bytestring, prettyprinter, hashable,
+        crypton,
+        directory, filepath, temporary, shelly, process,
+        hypersmv
+    default-language: Haskell2010
+    default-extensions:
+        DeriveDataTypeable
+        OverloadedStrings
+        ExtendedDefaultRules
+        TupleSections
+        ViewPatterns
+        ScopedTypeVariables
+        RankNTypes
+        FlexibleContexts
+    ghc-options: -w
+
