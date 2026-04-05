@@ -252,6 +252,16 @@ flipIntMapInt = IntMap.foldlWithKey (\xs k v -> IntMap.insert v k xs) IntMap.emp
 flipIntMapIntSafe :: IntMap Int -> IntMap IntSet
 flipIntMapIntSafe = IntMap.foldrWithKey (\i e -> IntMap.insertWith IntSet.union e (IntSet.singleton i)) IntMap.empty
 
+mapUnionWithM :: (Monad m,Ord a) => (b -> b -> m b) -> Map a b -> Map a b -> m (Map a b)
+mapUnionWithM merge xs ys = foldMapCPSM (\a b m -> mapInsertWithM merge a b m) xs return ys
+    
+mapInsertWithM :: (Monad m,Ord a) => (b -> b -> m b) -> a -> b -> Map a b -> m (Map a b)
+mapInsertWithM merge a b m = case Map.lookup a m of
+    Nothing -> return $ Map.insert a b m
+    Just bOld -> do
+        bNew <- merge bOld b
+        return $ Map.insert a bNew m
+
 isRange :: [Int] -> Maybe (Int,Int)
 isRange [] = Nothing
 isRange [x] = Just (x,x)
@@ -842,6 +852,9 @@ newtype MultiMap a b = MultiMap { unMultiMap :: Map a [b] }
 
 multiMapFromList :: Ord a => [(a,b)] -> MultiMap a b
 multiMapFromList xs = MultiMap $ Map.fromListWith (++) $ map (id >< (:[])) xs
+
+--multiMapInsertWith :: Ord a => (b -> b -> b) -> a -> b -> MultiMap a b -> MultiMap a b
+--multiMapInsertWith f x y m = MultiMap $ Map.insertWith (++) 
 
 multiMapUnion :: Ord a => MultiMap a b -> MultiMap a b -> MultiMap a b
 multiMapUnion (MultiMap xs) (MultiMap ys) = MultiMap $ Map.unionWith (++) xs ys

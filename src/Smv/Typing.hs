@@ -102,8 +102,8 @@ fromVarType :: VarType -> Ptype
 fromVarType (VInt is) = Penum is
 fromVarType VBool = Pboolean
 
-sizeOfVarType :: VarType -> Int
-sizeOfVarType (VInt is) = IntSet.size is
+sizeOfVarType :: VarType -> Integer
+sizeOfVarType (VInt is) = toEnum $ IntSet.size is
 sizeOfVarType VBool = 2
 
 exprOfVarType :: VarType -> ExprType

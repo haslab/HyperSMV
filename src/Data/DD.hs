@@ -22,7 +22,7 @@ import Data.BDD (BDD)
 import qualified Data.BDD as BDD
 import Utils
 
---import Debug.Trace as Trace
+import Debug.Trace as Trace
 
 type Vals dd = UV.Vector (Val dd)
 
@@ -322,7 +322,7 @@ orsPartialStates :: (IsVal (Val dd),Foldable t) => t (PartialStates dd) -> Parti
 orsPartialStates = foldl orPartialStates falsePartialStates
 
 andPartialStates :: IsVal (Val dd) => PartialStates dd -> PartialStates dd -> PartialStates dd
-andPartialStates = crossSetProduct (\x y -> maybeToSet $ andPartialState x y)
+andPartialStates xs ys = trace ("andPartialStates " ++ show (length xs) ++ "  " ++ show (length ys)) $ crossSetProduct (\x y -> maybeToSet $ andPartialState x y) xs ys
 
 andPartialState :: IsVal (Val dd) => PartialState dd -> PartialState dd -> Maybe (PartialState dd)
 andPartialState x y =
@@ -334,6 +334,11 @@ andPartialState x y =
 
 orPartialStates :: IsVal (Val dd) => PartialStates dd -> PartialStates dd -> PartialStates dd
 orPartialStates = Set.union 
+
+insertPartialState :: IsVal (Val dd) => Int -> Val dd -> PartialState dd -> Maybe (PartialState dd)
+insertPartialState dd_i val st = case IntMap.lookup dd_i st of
+    Nothing -> Just $ IntMap.insert dd_i val st
+    Just v -> if val==v then Just st else Nothing
 
 proxyBDD :: Proxy BDD
 proxyBDD = Proxy

@@ -50,7 +50,7 @@ import ExplicitState.Eval
 import Transform.Pexpr
 import Transform.Split
 
---import Debug.Trace as Trace
+import Debug.Trace as Trace
 
 transformToFixedExplicitState :: (BuildDD dd) => Proxy dd -> Integer -> Bool -> Bool -> Bool -> Maybe String -> PackedBmodule -> IO (DDExplicitStateSystem dd)
 transformToFixedExplicitState dd maxddsize removeDeadlocks doRemoveTemps debug docker p = do
@@ -69,14 +69,11 @@ transformDDSmvToExplicitState s1 s2 s3 s4 removeDeadlocks doRemoveTemps isDebug 
         ddnames <- Reader.asks varNames
         ddsizes <- Reader.asks (IntMap.map sizeOfVarType . varSizes)
         let ddsize = product ddsizes
-        ns <- liftM (V.fromList . nub . map (fst >< id)) $ sortedTypes -- we only use non-next names, and follow the dd order
-        sys <- identityReader $ do
+        ns <- trace ("sizes " ++ show ddsizes ++ " " ++ show ddsize) $ liftM (V.fromList . nub . map (fst >< id)) $ sortedTypes -- we only use non-next names, and follow the dd order
+        sys <- trace (dd_name p ++ "\ninitDDI " ++ show (dd_init p)) $ trace ("invarDDI " ++ show (dd_invar p)) $ trace ("trans ddI " ++ show (dd_trans p) ++ "\ntrans ddO") $ identityReader $ do
 --            liftIO $ putStrLn (show ddsize++"\ninitDDs\n"++show ddnames++"\n"++unlines (map show $ Map.elems $ unAndDDs $ dd_init p))
             initStates <- initDDToStates (dd_init p) (dd_invar p)
---            liftIO $ putStrLn $ "invarDD " ++ show (dd_invar p)
-            --liftIO $ putStrLn $ "trans dd " ++ show (dd_trans p) ++ "\ntrans dd"
---            liftIO $ putStrLn $ (show ns ++"\nnum init states "++ show (Map.size $ fst $ initStates) ++"\n" ++ unlines (map (\(x,y) -> show x) $ Map.toList $ fst initStates) ++ " initStates")
-            (states,trans) <- transDDToStates (dd_trans p) (dd_invar p) (vectorIndices $ V.map fst ns) initStates
+            (states,trans) <- trace (show ns ++"\nnum init states "++ show (Map.size $ fst $ initStates) ++"\n" ++ unlines (map (\(x,y) -> show x) $ Map.toList $ fst initStates) ++ " initStates") $ transDDToStates (dd_trans p) (dd_invar p) (vectorIndices $ V.map fst ns) initStates
             let inits' = IntSet.fromList $ Map.elems $ fst initStates
             let (sysInits,sysTrans) = mergeModel inits' (flipMapInt $ fst states) trans
             let sysAccepts = Nothing
@@ -125,7 +122,8 @@ initDDStates :: (ExplicitInitDDs dd sinit,BuildDDs dd sinvar,Monad m) => sinit -
 initDDStates inits invar = identityReader $ do
 --    st <- DDs.allSat inits
     st <- initStatesDDs inits
-    invarPartialStates invar st
+    st' <- invarPartialStates invar st
+    trace ("\ninitPartials\n" ++ show st') $ return st'
 
 class BuildDDs dd s => ExplicitInitDDs dd s where
     initStatesDDs :: (Monad m) => s -> DDM m (DD.PartialStates dd)
@@ -191,14 +189,14 @@ transDDToStates e invar ns sts = transDDToStates2 e invar ns (Map.toList $ fst s
 type States2 dd = (Map (State dd) Int,Map (State dd) Int,Int)
 type ExplicitSystem2 dd = (States2 dd,Transitions)
 
+-- the recursive procedure
 transDDToStates2 :: (ExplicitTransDDs dd strans,BuildDDs dd sinvar,Monad m) => strans -> sinvar -> Map Pident Int -> [(State dd,Int)] -> ExplicitSystem dd -> DDM m (ExplicitSystem dd)
 transDDToStates2 e invar ns [] acc = return acc
-transDDToStates2 e invar ns ((st,i):sts') acc@((acc_sts,acc_num),acc_trans) = {-trace ("processing trans state " ++ show i) $ -} do
+transDDToStates2 e invar ns ((st,i):sts') acc@((acc_sts,acc_num),acc_trans) = trace ("processing trans state " ++ show i) $ do
     cands <- transDDStates e invar ns st
     news <- {-trace (show cands ++ " transStates") $-} expandPartialStates cands
     let ((olds',news',num'),ts') = linkNextStates i (Set.map completeToState news) acc
-    --trace (show num' ++ "\n" ++ show news') $
-    transDDToStates2 e invar ns (sts' ++ Map.toList news') ((Map.union olds' news',num'),ts')
+    trace (show num' ++ "\n" ++ show news') $ transDDToStates2 e invar ns (sts' ++ Map.toList news') ((Map.union olds' news',num'),ts')
 
 -- adds new states and transitions to them
 linkNextStates :: BuildDD dd => Int -> ProspectiveStates dd -> ExplicitSystem dd -> ExplicitSystem2 dd
