@@ -31,6 +31,7 @@ import GHC.Generics
 import qualified Data.Bit as Bit
 import Data.Proxy
 import Data.Hashable
+import Prettyprinter
 
 import Utils
 import Pretty
@@ -261,7 +262,7 @@ expandVar n sz = do
             VBool -> [Bbool False,Bbool True]
     return $ HashSet.fromList vs
 
-class (Hashable s,DDstructure (DDM Identity) dd s,BuildDD dd) => BuildDDs dd s | s -> dd where
+class (Hashable s,DDstructure (DDM Identity) dd s,BuildDD dd,Pretty s) => BuildDDs dd s | s -> dd where
     ddsToBexpr :: Monad m => s -> BM (DDM m) Bexpr
     ddsToExpr :: Monad m => s -> DDM m Pexpr
     ddsToConjunction :: Monad m => s -> DDM m [dd]
@@ -284,28 +285,31 @@ instance (BuildDD dd) => BuildDDs dd (DDs.NextDDs dd) where
     
 instance (BuildDD dd) => BuildDDs dd (DDs.TreeDDs dd) where
     
-    ddsToBexpr (DDs.NodeAndDDs dds) = liftM (Bopn Pand . HashSet.fromList) $ mapM (ddsToBexpr . snd) $ Map.elems dds
-    ddsToBexpr (DDs.NodeOrDDs dds) = liftM (Bopn Por . HashSet.fromList) $ mapM (ddsToBexpr . snd) $ Map.elems dds
-    ddsToBexpr (DDs.LeafDDs sup (sz,dd)) = ddToBexpr dd
+    ddsToBexpr (DDs.NodeAndDDs dds) = liftM (Bopn Pand . HashSet.fromList) $ mapM (ddsToBexpr ) $ Map.elems dds
+    ddsToBexpr (DDs.NodeOrDDs dds) = liftM (Bopn Por . HashSet.fromList) $ mapM (ddsToBexpr ) $ Map.elems dds
+    ddsToBexpr (DDs.LeafDDs sup (dd)) = ddToBexpr dd
     
-    ddsToExpr (DDs.NodeAndDDs dds) = liftM (Peopn Pand) $ mapM (ddsToExpr . snd) $ Map.elems dds
-    ddsToExpr (DDs.NodeOrDDs dds) = liftM (Peopn Por) $ mapM (ddsToExpr . snd) $ Map.elems dds
-    ddsToExpr (DDs.LeafDDs sup (sz,dd)) = ddToExpr dd
+    ddsToExpr (DDs.NodeAndDDs dds) = liftM (Peopn Pand) $ mapM (ddsToExpr) $ Map.elems dds
+    ddsToExpr (DDs.NodeOrDDs dds) = liftM (Peopn Por) $ mapM (ddsToExpr ) $ Map.elems dds
+    ddsToExpr (DDs.LeafDDs sup (dd)) = ddToExpr dd
     
     ddsToConjunction (DDs.NodeAndDDs dds) = do
-        dds' <- mapM (ddsToConjunction . snd) $ Map.elems dds
+        dds' <- mapM (ddsToConjunction) $ Map.elems dds
         return $ concat dds'
-    ddsToConjunction (DDs.LeafDDs sup (sz,dd)) = return [dd]
+    ddsToConjunction (DDs.LeafDDs sup (dd)) = return [dd]
     ddsToConjunction dds = identityReader $ do
         dd <- DDs.flatten dds
         return [dd]
 
-class (Hashable dd,DD (DDM Identity) dd) => BuildDD dd where
+class (Hashable dd,DD (DDM Identity) dd,Pretty dd) => BuildDD dd where
     buildVarDD :: Monad m => DualPident -> VarType -> Either IntSet Bool -> DDM m dd
 --    buildValDD :: Monad m => Int -> DD.Val dd -> DDM m dd
     ddToBexpr :: Monad m => dd -> BM (DDM m) Bexpr
     ddToExpr :: Monad m => dd -> DDM m Pexpr
     ddToExpr dd = bmInDDM (ddToBexpr dd >>= fromBexpr)
+   
+instance Pretty DD.GIDD where
+    pretty = prettyGIDD
    
 instance BuildDD DD.GIDD where
      buildVarDD = buildVarGIDD
@@ -328,6 +332,14 @@ buildVarGIDD n ty vs = do
 --    let res = IDD.var ni (num,project vs)
 --    --trace ("buildVarIDD " ++ show n ++" "++ show ty ++" "++ show vs ++ " " ++ show ni) $
 --    return $ res
+
+prettyGIDD :: DD.GIDD -> Doc ann
+prettyGIDD (DD.GIDD dd) = IDD.fold goBranch goLeaf dd
+  where
+    goLeaf :: Bool -> Doc ann
+    goLeaf b = pretty b
+    goBranch :: Int -> Vector (Doc ann) -> Doc ann
+    goBranch ni cs = parens $ sepBy (pretty "|") $ V.toList (V.imap (\i str -> parens (pretty "v" <> pretty ni <+> pretty "=" <+> pretty "i" <> pretty i <+> pretty "&" <+> str)) cs)
 
 giddToExpr :: (Monad m) => DD.GIDD -> DDM m Pexpr
 giddToExpr (DD.GIDD dd) = IDD.foldM goBranch goLeaf dd
@@ -358,7 +370,10 @@ giddToBexpr (DD.GIDD dd) = IDD.foldM goBranch goLeaf dd
         let mkboolval b = if b then Bvar n VBool else bnot (Bvar n VBool) 
         let mkval i = case t of { VInt _ -> mkintval i; VBool -> mkboolval (intToBool i) } 
         return $ bors $ HashSet.fromList $ V.toList $ V.map (\(v,c) -> mkval v `band` c) (V.zip (UV.convert vals) cs)
-    
+
+instance Pretty BDD where
+    pretty = prettyBDD
+
 instance BuildDD BDD where
      buildVarDD = buildVarBDD
      ddToBexpr = bddToBexpr
@@ -374,6 +389,17 @@ buildVarBDD n ty vs = do
     case vs of
         Left _ -> error "buildVarBDD int"
         Right b -> DD.var ni (DD.boolToVal b)
+
+prettyBDD :: BDD -> Doc ann
+prettyBDD dd = BDD.fold goBranch goLeaf dd
+  where
+    goLeaf :: Bool -> Doc ann
+    goLeaf b = pretty b
+    goBranch :: Int -> Doc ann -> Doc ann -> Doc ann
+    goBranch ni lo hi = parens $
+        parens (pretty "!v" <> pretty ni <+> pretty "&" <+> hi)
+        <+> pretty "|" <+>
+        parens (pretty "v" <> pretty ni <+> pretty "&" <+> hi)
 
 bddToExpr :: (Monad m) => BDD -> (DDM m) Pexpr
 bddToExpr dd = BDD.foldCPSM goBranch goLeaf return dd

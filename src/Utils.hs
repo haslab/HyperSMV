@@ -58,6 +58,12 @@ import Control.Monad.Identity
 
 import Pretty
 
+setCatMaybes :: Ord a => Set (Maybe a) -> Set a
+setCatMaybes = Set.foldl go Set.empty
+    where
+    go acc Nothing = acc
+    go acc (Just x) = Set.insert x acc
+
 intersections :: Ord a => [Set a] -> Set a
 intersections [] = Set.empty
 intersections [x] = x
@@ -261,6 +267,10 @@ mapInsertWithM merge a b m = case Map.lookup a m of
     Just bOld -> do
         bNew <- merge bOld b
         return $ Map.insert a bNew m
+
+mapFromListWithM :: (Ord a,Monad m) => (b -> b -> m b) -> [(a,b)] -> m (Map a b)
+mapFromListWithM merge [] = return Map.empty
+mapFromListWithM merge ((x,y):zs) = mapInsertWithM merge x y =<< mapFromListWithM merge zs
 
 isRange :: [Int] -> Maybe (Int,Int)
 isRange [] = Nothing

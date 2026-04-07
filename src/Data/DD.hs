@@ -105,6 +105,7 @@ class (IsVal (Val dd),Eq dd,Hashable dd,Show dd,Monad m) => DD m dd where
     var dd_i v = var' dd_i (Set.singleton v)
     var' :: Int -> Set (Val dd) -> m dd
     vals :: Int -> m (Vals dd)
+    sizes :: dd -> m (IntMap Int)
     size :: dd -> m Integer
     
 --class Monad m => IDDMonad m where
@@ -245,6 +246,11 @@ instance GIDDMonad m => DD m GIDD where
         let sz = unsafeIntLookupNote "valsGIDD" dd_i szs
         return $ UV.fromList $ IntSet.toList sz
     {-# INLINE vals #-}
+    sizes (GIDD dd) = do
+        szs <- gidd_sizes
+        let vs = IDD.support dd
+        return $ IntMap.fromSet (\dd_i -> IntSet.size $ unsafeIntLookupNote "sizeGIDD" dd_i szs) vs
+    {-# INLINE sizes #-}
     size (GIDD dd) = do
         szs <- gidd_sizes
         let vs = IDD.support dd
@@ -299,6 +305,10 @@ instance BDDMonad m => DD m BDD where
         otherwise -> return BDD.true
     vals dd_i = return $ UV.fromList [Bit False,Bit True]
     {-# INLINE vals #-}
+    sizes dd = do
+        let vs = BDD.support dd
+        return $ IntMap.fromSet (const 2) vs
+    {-# INLINE sizes #-}
     size dd = do
         let vs = BDD.support dd
         return $ product $ map (const 2) (IntSet.toList vs)

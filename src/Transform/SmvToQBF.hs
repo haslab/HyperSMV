@@ -370,11 +370,11 @@ instance QBFDDs (NextDDs BDD) where
     boolBDD True = DDexpr $ NextDDs $ Map.singleton IntSet.empty BDD.true
 
 instance QBFDDs (TreeDDs BDD) where
-    bddsToQCIR depth render (NodeAndDDs xs) = andsQCIR =<< mapM (bddsToQCIR depth render . snd) xs
-    bddsToQCIR depth render (NodeOrDDs xs) = orsQCIR =<< mapM (bddsToQCIR depth render . snd) xs
-    bddsToQCIR depth render (LeafDDs sup (sz,bdd)) = bddToQCIR depth render bdd
-    boolBDD False = DDexpr $ LeafDDs IntSet.empty (1,BDD.false)
-    boolBDD True = DDexpr $ LeafDDs IntSet.empty (1,BDD.true)
+    bddsToQCIR depth render (NodeAndDDs xs) = andsQCIR =<< mapM (bddsToQCIR depth render ) xs
+    bddsToQCIR depth render (NodeOrDDs xs) = orsQCIR =<< mapM (bddsToQCIR depth render ) xs
+    bddsToQCIR depth render (LeafDDs sup (bdd)) = bddToQCIR depth render bdd
+    boolBDD False = DDexpr $ LeafDDs IntMap.empty (BDD.false)
+    boolBDD True = DDexpr $ LeafDDs IntMap.empty (BDD.true)
 
 registerModelPident :: Monad m => String -> Int -> Pident -> QCIRM m GateId
 registerModelPident dim i n = do
