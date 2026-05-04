@@ -50,7 +50,7 @@ import ExplicitState.Eval
 import Transform.Pexpr
 import Transform.Split
 
-import Debug.Trace as Trace
+--import Debug.Trace as Trace
 
 transformToFixedExplicitState :: (BuildDD dd) => Proxy dd -> Integer -> Bool -> Bool -> Bool -> Maybe String -> PackedBmodule -> IO (DDExplicitStateSystem dd)
 transformToFixedExplicitState dd maxddsize removeDeadlocks doRemoveTemps debug docker p = do
@@ -69,11 +69,11 @@ transformDDSmvToExplicitState s1 s2 s3 s4 removeDeadlocks doRemoveTemps isDebug 
         ddnames <- Reader.asks varNames
         ddsizes <- Reader.asks (IntMap.map sizeOfVarType . varSizes)
         let ddsize = product ddsizes
-        ns <- trace ("sizes " ++ show ddsizes ++ " " ++ show ddsize) $ liftM (V.fromList . nub . map (fst >< id)) $ sortedTypes -- we only use non-next names, and follow the dd order
-        sys <- trace (dd_name p ++ "\ninitDDI " ++ prettyprint (dd_init p)) $ trace ("invarDDI " ++ prettyprint (dd_invar p)) $ trace ("trans ddI " ++ prettyprint (dd_trans p) ++ "\ntrans ddO") $ identityReader $ do
+        ns <- {-trace ("sizes " ++ show ddsizes ++ " " ++ show ddsize) $-} liftM (V.fromList . nub . map (fst >< id)) $ sortedTypes -- we only use non-next names, and follow the dd order
+        sys <- {-trace (dd_name p ++ "\ninitDDI " ++ prettyprint (dd_init p)) $ trace ("invarDDI " ++ prettyprint (dd_invar p)) $ trace ("trans ddI " ++ prettyprint (dd_trans p) ++ "\ntrans ddO") $ -} identityReader $ do
 --            liftIO $ putStrLn (show ddsize++"\ninitDDs\n"++show ddnames++"\n"++unlines (map show $ Map.elems $ unAndDDs $ dd_init p))
             initStates <- initDDToStates (dd_init p) (dd_invar p)
-            (states,trans) <- trace (show ns ++"\nnum init states "++ show (Map.size $ fst $ initStates) ++"\n" ++ unlines (map (\(x,y) -> show x) $ Map.toList $ fst initStates) ++ " initStates") $ transDDToStates (dd_trans p) (dd_invar p) (vectorIndices $ V.map fst ns) initStates
+            (states,trans) <- {-trace (dd_name p ++ " " ++ show ns ++"\nnum init states "++ show (Map.size $ fst $ initStates) ++"\n" ++ unlines (map (\(x,y) -> show x) $ Map.toList $ fst initStates) ++ " initStates") $ -} transDDToStates (dd_trans p) (dd_invar p) (vectorIndices $ V.map fst ns) initStates
             let inits' = IntSet.fromList $ Map.elems $ fst initStates
             let (sysInits,sysTrans) = mergeModel inits' (flipMapInt $ fst states) trans
             let sysAccepts = Nothing
@@ -123,7 +123,8 @@ initDDToStates' inits invar = identityReader $ do
 --    st <- DDs.allSat inits
     st <- initStatesDDs inits (Set.singleton IntMap.empty)
     st' <- initStatesDDs invar st
-    trace ("\ninitPartials\n" ++ show st') $ return st'
+    --trace ("\ninitPartials\n" ++ show st') $
+    return st'
 
 class BuildDDs dd s => ExplicitInitDDs dd s where
     initStatesDDs :: (Monad m) => s -> DD.PartialStates dd -> DDM m (DD.PartialStates dd)
@@ -137,11 +138,11 @@ instance BuildDD dd => ExplicitInitDDs dd (NextDDs dd) where
 --    initStatesDDs (NextDDs dds) = liftM DD.andsPartialStates $ mapM initDDState dds
     
 instance BuildDD dd => ExplicitInitDDs dd (TreeDDs dd) where
-    initStatesDDs (NodeAndDDs dds) sts = foldMapCPSM (const initStatesDDs) sts return dds
+    initStatesDDs (NodeAndDDs dds) sts = foldMultiMapCPSM (const initStatesDDs) sts return dds
 --    initStatesDDs (NodeAndDDs dds) = liftM DD.andsPartialStates $ mapM (initStatesDDs . snd) dds
-    initStatesDDs (NodeOrDDs dds) sts = liftM DD.orsPartialStates $ mapM (flip initStatesDDs sts ) dds
+    initStatesDDs (NodeOrDDs dds) sts = liftM DD.orsPartialStates $ mapM (flip initStatesDDs sts) dds
 --    initStatesDDs (NodeOrDDs dds) = liftM DD.orsPartialStates $ mapM (initStatesDDs . snd) dds
-    initStatesDDs (LeafDDs sup (dd)) sts = initDDStates dd sts
+    initStatesDDs (LeafDDs sup dd) sts = initDDStates dd sts
 
 initDDStates :: (BuildDD dd,Monad m) => dd -> DD.PartialStates dd -> DDM m (DD.PartialStates dd)
 initDDStates dd sts = liftM Set.unions $ traverseSet (initDDState dd) sts
@@ -152,12 +153,10 @@ initDDState dd st0 = identityReader $ do
     DD.accum (goBranch r) (goLeaf) (Just st0) dd
   where
 --    goLeaf :: PartialState dd -> Bool -> (PartialStates dd)
-    goLeaf Nothing b = Set.empty
-    goLeaf (Just st) b = if b then Set.singleton st else Set.empty
+    goLeaf st b = if b then maybeToSet st else Set.empty
 --    goBranch :: DDReader -> PartialState dd -> Int -> Vector (PartialState dd)
-    goBranch r mb dd_i = case mb of
-        Nothing -> V.map (const Nothing) (UV.convert vals)
-        Just st -> V.map (\val -> DD.insertPartialState dd_i val st) (UV.convert vals)
+    goBranch r Nothing dd_i = V.empty
+    goBranch r (Just st) dd_i = V.map (\val -> DD.insertPartialState dd_i val st) (UV.convert vals)
       where vals = Reader.runReader (DD.vals dd_i) r
         
 
@@ -197,18 +196,20 @@ transDDToStates :: (ExplicitInitDDs dd sinvar,ExplicitTransDDs dd strans,BuildDD
 transDDToStates e invar ns sts = transDDToStates2 e invar ns (Map.toList $ fst sts) (sts,IntMap.empty)
 
 -- (existing states,new states,next state number)
+-- we can reuse previously seen states (with the same values), since we are only handling INIT/INVAR/TRANS formulas. no further state context is needed.
 type States2 dd = (Map (State dd) Int,Map (State dd) Int,Int)
 type ExplicitSystem2 dd = (States2 dd,Transitions)
 
 -- the recursive procedure
 transDDToStates2 :: (ExplicitInitDDs dd sinvar,ExplicitTransDDs dd strans,BuildDDs dd sinvar,Monad m) => strans -> sinvar -> Map Pident Int -> [(State dd,Int)] -> ExplicitSystem dd -> DDM m (ExplicitSystem dd)
 transDDToStates2 e invar ns [] acc = return acc
-transDDToStates2 e invar ns ((st,i):sts') acc@((acc_sts,acc_num),acc_trans) = trace ("processing trans state " ++ show i ++ "\nwith exp " ++ show (st)) $ do
+transDDToStates2 e invar ns ((st,i):sts') acc@((acc_sts,acc_num),acc_trans) = {-trace ("processing trans state " ++ show i ++ "\nwith exp " ++ show (st)) $-} do
     r <- Reader.ask
-    cands <- trace ("exp names " ++ show ns ++ "\n" ++ "dd names" ++ show (varNames r)) $ transDDToStates3 e invar ns st
-    news <- trace (show cands ++ "\n" ++ show (Set.map (map ((\i -> unsafeIntLookupNote "name" i $ varNames r) >< id) . IntMap.toList) cands) ++ "\ntransStates") $ expandPartialStates cands
+    cands <- {-trace ("exp names " ++ show ns ++ "\n" ++ "dd names" ++ show (varNames r)) $-} transDDToStates3 e invar ns st
+    news <- {-trace (show cands ++ "\n" ++ show (Set.map (map ((\i -> unsafeIntLookupNote "name" i $ varNames r) >< id) . IntMap.toList) cands) ++ "\ntransStates") $-} expandPartialStates cands
     let ((olds',news',num'),ts') = linkNextStates i (Set.map completeToState news) acc
-    trace (show num' ++ "\n" ++ show news') $ transDDToStates2 e invar ns (sts' ++ Map.toList news') ((Map.union olds' news',num'),ts')
+    --trace (show num' ++ "\n" ++ show news') $
+    transDDToStates2 e invar ns (sts' ++ Map.toList news') ((Map.union olds' news',num'),ts')
 
 -- adds new states and transitions to them
 linkNextStates :: BuildDD dd => Int -> ProspectiveStates dd -> ExplicitSystem dd -> ExplicitSystem2 dd
@@ -244,7 +245,7 @@ instance BuildDD dd => ExplicitTransDDs dd (NextDDs dd) where
     --    return $ DD.andsPartialStates dds'
  
 instance BuildDD dd => ExplicitTransDDs dd (TreeDDs dd) where
-    transStatesDDs ns pre_st (NodeAndDDs dds) sts = foldMapCPSM (\_ -> transStatesDDs ns pre_st) sts return dds 
+    transStatesDDs ns pre_st (NodeAndDDs dds) sts = foldMultiMapCPSM (\_ -> transStatesDDs ns pre_st) sts return dds 
     transStatesDDs ns pre_st (NodeOrDDs dds) sts = liftM DD.orsPartialStates $ mapM (\dd -> transStatesDDs ns pre_st dd sts) dds
     transStatesDDs ns pre_st (LeafDDs sup (dd)) sts = transDDStates ns dd pre_st sts
     --transStatesDDs ns pre_st (NodeAndDDs dds) = liftM DD.andsPartialStates $ mapM (\dd -> transStatesDDs ns pre_st dd) dds

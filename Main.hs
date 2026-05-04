@@ -202,7 +202,7 @@ defaultToMCArgs = ToMC
     , k = 1 &= help ("number of unrolls (QCIR only)") &= name "k"
     , sem = QCIR.Pes &= help ("BMC semantics (QCIR only)") &= name "s"
     , minimize = Nothing &= help ("minimize variable names") &= name "m"
-    , maxddsize = 0 &= help "set a limit to the maximum size of each in-memory DD block (0 default to no limit)"
+    , maxddsize = 2048 &= help "set a limit to the maximum size of each in-memory DD block (default of 2048; 0 for no limit)"
     , debug = False &= help ("debug mode") &= name "d"
     , removeTemps = True &= help ("remove temporary files") &= name "rem"
     } &= details ["Hyper SMV to Hyper Model Checkers"] 
@@ -223,7 +223,7 @@ defaultAHArgs = AH
     , ahbisim = False &= help "compute bisimulation quotients at the AutoHyper level"
     , docker = Nothing &= help "run solver installed inside a docker container"
     , minimize = Nothing &= help ("minimize variable names") &= name "m"
-    , maxddsize = 0 &= help "set a limit to the maximum size of each in-memory DD block (0 default to no limit)"
+    , maxddsize = 2048 &= help "set a limit to the maximum size of each in-memory DD block (default of 2048; 0 for no limit)"
     , debug = False &= help "debug mode" &= name "d"
     , removeTemps = True &= help ("remove temporary files") &= name "rem"
     } &= details ["Hyper SMV Model Checking - AutoHyper backend"] 
@@ -241,7 +241,7 @@ defaultQBFArgs = QBF
     , splitFormula = Nothing &= help "split and send subexpressions of the formula to the LTLSPEC of each model (affects semantics!)"
     , docker = Nothing &= help "run solver installed inside a docker container"
     , minimize = Nothing &= help ("minimize variable names") &= name "m"
-    , maxddsize = 0 &= help "set a limit to the maximum size of each in-memory DD block (0 default to no limit)"
+    , maxddsize = 2048 &= help "set a limit to the maximum size of each in-memory DD block (default of 2048; 0 for no limit)"
     , debug = False &= help "debug mode" &= name "d"
     , removeTemps = True &= help ("remove temporary files") &= name "rem"
     } &= details ["Hyper SMV Model Checking - QBF backend"] 
@@ -281,27 +281,26 @@ mainForward args = do
         else when (length (input args) /= length (output args)) $ exitWithErrorMessage "Please provide the same number of inputs and outputs"
     when (isNothing (informula args) || isNothing (outformula args)) $ exitWithErrorMessage "Please specify input and output formula files"
     doFlatten args (input args) $ \infiles1 -> doBoolean args infiles1 $ \infiles2 boolNames -> do
-        inps <- doInputs args infiles2 boolNames
-        
-        case hypertool args of
-            Nothing -> error "please select a hyper tool"
-            Just AutoHyper -> doAutoHyper args inps
-            Just HyperQube -> doHyperQube args inps
-            Just QCIR -> doQBF args infiles2 inps
+        doInputs args infiles2 boolNames $ \infiles3 inps -> 
+            case hypertool args of
+                Nothing -> error "please select a hyper tool"
+                Just AutoHyper -> doAutoHyper args inps
+                Just HyperQube -> doHyperQube args inps
+                Just QCIR -> doQBF args infiles3 inps
 
 mainAH :: Args -> IO ()
 mainAH args = do
     when (isNothing (informula args)) $ exitWithErrorMessage "Please specify input formula file"
     doFlatten args (input args) $ \infiles1 -> doBoolean args infiles1 $ \infiles2 boolNames -> do
-        inps <- doInputs args infiles2 boolNames
-        doAutoHyper args inps
+        doInputs args infiles2 boolNames $ \infiles3 inps ->
+            doAutoHyper args inps
 
 mainQBF :: Args -> IO ()
 mainQBF args = do
     when (isNothing (informula args)) $ exitWithErrorMessage "Please specify input formula file"
     doFlatten args (input args) $ \infiles1 -> doBoolean args infiles1 $ \infiles2 boolNames -> do
-        inps <- doInputs args infiles2 boolNames
-        doQBF args infiles2 inps
+        doInputs args infiles2 boolNames $ \infiles3 inps -> 
+            doQBF args infiles3 inps
 
 doFlatten :: Args -> [FilePath] -> ([FilePath] -> IO a) -> IO a
 doFlatten args infiles go = do
@@ -356,12 +355,14 @@ globalSplitFormula args@(QBF {}) = maybe NoSplitFormula id (splitFormula args)
 globalSplitFormula args = NoSplitFormula
 
 -- input files come with a dummy ltlspec, which we ignore
-doInputs :: Args -> [FilePath] -> Maybe [Subst] -> IO ([PackedPmodule],[((Digest SHA256,Int),PackedBmodule)],Bformula,[Subst])
-doInputs args infiles boolNames = do
-    (insmvs,qvars,formula) <- timeIt "Parsing input SMVs and Hyper formula" $ do
+doInputs :: Args -> [FilePath] -> Maybe [Subst] -> ([FilePath] -> ([PackedPmodule],[((Digest SHA256,Int),PackedBmodule)],Bformula,[Subst]) -> IO a) -> IO a
+doInputs args infiles boolNames go = do
+    (infiles',finalizers,insmvs,qvars,formula) <- timeIt "Parsing input SMVs and Hyper formula" $ do
         insmvs <- liftM (map (id >< dropLTLSpec)) $ readSMVs infiles
-        forM (zip infiles insmvs) $ \(infile,(_,insmv)) -> do
-            writeSMV args infile Nothing insmv
+        (infiles',finalizers) <- liftM unzip $ forM (zip infiles insmvs) $ \(infile,(_,insmv)) -> do
+            createSystemTemp (removeTemps args) (debug args) (takeFileName infile) $ \infile' -> do
+                writeSMV args infile' Nothing insmv
+                return infile'
         
         let tys = map (moduleTypes . snd) insmvs
         let sss = map (moduleSubst . snd) insmvs
@@ -369,7 +370,7 @@ doInputs args infiles boolNames = do
         let qs = quantsPformula formula
         let qvars = map snd $ groupVarSet (map fst qs) $ varsFormula formula
         when (length qs /= length insmvs) $ exitWithErrorMessage "Please provide same number of models and formula quantifiers"
-        return (insmvs,qvars,formula)
+        return (infiles',finalizers,insmvs,qvars,formula)
     
     (midsmvs,names) <- timeIt "Processing input SMVs" $ liftM (unzip . map assocl) $ do
         mapDigestM (doSmv args) $ map assocr $ zip insmvs qvars
@@ -384,7 +385,9 @@ doInputs args infiles boolNames = do
         return splits
     
     let names' = boolNames `maybeComposeSubsts` (map fromNameSubst names)
-    return (map snd insmvs,outsmvs,outformula,names')
+    ret <- go infiles' (map snd insmvs,outsmvs,outformula,names')
+    mapM_ id finalizers
+    return ret
 
 doAutoHyper :: Eq digest => Args -> ([PackedPmodule],[(digest,PackedBmodule)],Bformula,[Subst]) -> IO ()
 doAutoHyper args (insmvs,smvs,formula,names) = do

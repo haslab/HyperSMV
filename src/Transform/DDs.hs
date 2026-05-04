@@ -285,16 +285,16 @@ instance (BuildDD dd) => BuildDDs dd (DDs.NextDDs dd) where
     
 instance (BuildDD dd) => BuildDDs dd (DDs.TreeDDs dd) where
     
-    ddsToBexpr (DDs.NodeAndDDs dds) = liftM (Bopn Pand . HashSet.fromList) $ mapM (ddsToBexpr ) $ Map.elems dds
-    ddsToBexpr (DDs.NodeOrDDs dds) = liftM (Bopn Por . HashSet.fromList) $ mapM (ddsToBexpr ) $ Map.elems dds
+    ddsToBexpr (DDs.NodeAndDDs dds) = liftM (Bopn Pand . HashSet.fromList) $ mapM (ddsToBexpr ) $ multiMapElems dds
+    ddsToBexpr (DDs.NodeOrDDs dds) = liftM (Bopn Por . HashSet.fromList) $ mapM (ddsToBexpr ) $ multiMapElems dds
     ddsToBexpr (DDs.LeafDDs sup (dd)) = ddToBexpr dd
     
-    ddsToExpr (DDs.NodeAndDDs dds) = liftM (Peopn Pand) $ mapM (ddsToExpr) $ Map.elems dds
-    ddsToExpr (DDs.NodeOrDDs dds) = liftM (Peopn Por) $ mapM (ddsToExpr ) $ Map.elems dds
+    ddsToExpr (DDs.NodeAndDDs dds) = liftM (Peopn Pand) $ mapM (ddsToExpr) $ multiMapElems dds
+    ddsToExpr (DDs.NodeOrDDs dds) = liftM (Peopn Por) $ mapM (ddsToExpr ) $ multiMapElems dds
     ddsToExpr (DDs.LeafDDs sup (dd)) = ddToExpr dd
     
     ddsToConjunction (DDs.NodeAndDDs dds) = do
-        dds' <- mapM (ddsToConjunction) $ Map.elems dds
+        dds' <- mapM (ddsToConjunction) $ multiMapElems dds
         return $ concat dds'
     ddsToConjunction (DDs.LeafDDs sup (dd)) = return [dd]
     ddsToConjunction dds = identityReader $ do

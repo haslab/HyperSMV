@@ -22,7 +22,7 @@ import Data.BDD (BDD)
 import qualified Data.BDD as BDD
 import Utils
 
-import Debug.Trace as Trace
+--import Debug.Trace as Trace
 
 type Vals dd = UV.Vector (Val dd)
 
@@ -332,7 +332,7 @@ orsPartialStates :: (IsVal (Val dd),Foldable t) => t (PartialStates dd) -> Parti
 orsPartialStates = foldl orPartialStates falsePartialStates
 
 andPartialStates :: IsVal (Val dd) => PartialStates dd -> PartialStates dd -> PartialStates dd
-andPartialStates xs ys = trace ("andPartialStates " ++ show (length xs) ++ "  " ++ show (length ys)) $ crossSetProduct (\x y -> maybeToSet $ andPartialState x y) xs ys
+andPartialStates xs ys = {-trace ("andPartialStates " ++ show (length xs) ++ "  " ++ show (length ys)) $-} crossSetProduct (\x y -> maybeToSet $ andPartialState x y) xs ys
 
 andPartialState :: IsVal (Val dd) => PartialState dd -> PartialState dd -> Maybe (PartialState dd)
 andPartialState x y =

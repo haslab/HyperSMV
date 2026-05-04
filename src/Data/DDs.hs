@@ -90,11 +90,13 @@ class (DD m dd,Show s) => DDstructure m dd s | s -> dd where
     allSatComplete = allSatCompleteDefault
     allSatCompleteDefault = DD.allSatComplete <=< flatten 
     
-    ands :: (DDstructure m dd s,Foldable t) => t s -> m s
+    ands, andsDefault :: (DDstructure m dd s,Foldable t) => t s -> m s
     ands xs = DD.true >>= singleton >>= \z -> Foldable.foldlM and z xs
+    andsDefault xs = DD.true >>= singleton >>= \z -> Foldable.foldlM andDefault z xs
 
-    ors :: (DDstructure m dd s,Foldable t) => t s -> m s
+    ors, orsDefault :: (DDstructure m dd s,Foldable t) => t s -> m s
     ors xs = DD.false >>= singleton >>= \z -> Foldable.foldlM or z xs
+    orsDefault xs = DD.false >>= singleton >>= \z -> Foldable.foldlM orDefault z xs
     
     -- ands,ors,leaf,cont
     foldCPS :: (b -> b -> m b) -> (b -> b -> m b) -> (dd -> m b) -> (b -> m r) -> s -> m r
@@ -223,21 +225,21 @@ dd_identity' (proxy::Proxy dd) = do
     ands =<< K.mapWithKeyM mkId nexts
 
 data TreeDDs dd
-    = NodeAndDDs (Map (IntMap Int) (TreeDDs dd))
-    | NodeOrDDs (Map (IntMap Int) (TreeDDs dd))
+    = NodeAndDDs (MultiMap (IntMap Int) (TreeDDs dd))
+    | NodeOrDDs (MultiMap (IntMap Int) (TreeDDs dd))
     | LeafDDs (IntMap Int) dd
     deriving (Eq,Show,Generic)
     
 instance Pretty dd => Pretty (TreeDDs dd) where
-    pretty (NodeAndDDs dds) = vcat $ pretty "&" : (map (nest 2 . pretty) $ Map.elems dds)
-    pretty (NodeOrDDs dds) = vcat $ pretty "|" : (map (nest 2 . pretty) $ Map.elems dds)
+    pretty (NodeAndDDs dds) = vcat $ pretty "&" : (map (nest 2 . pretty) $ multiMapElems dds)
+    pretty (NodeOrDDs dds) = vcat $ pretty "|" : (map (nest 2 . pretty) $ multiMapElems dds)
     pretty (LeafDDs _ dd) = pretty dd
     
 instance Hashable dd => Hashable (TreeDDs dd)
 
 supportTreeDDs :: TreeDDs dd -> IntMap Int
-supportTreeDDs (NodeAndDDs dds) = IntMap.unions $ Map.keys dds
-supportTreeDDs (NodeOrDDs dds) = IntMap.unions $ Map.keys dds
+supportTreeDDs (NodeAndDDs dds) = IntMap.unions $ multiMapKeys dds
+supportTreeDDs (NodeOrDDs dds) = IntMap.unions $ multiMapKeys dds
 supportTreeDDs (LeafDDs vs _) = vs
 
 sizeTrees :: IntMap Int -> Integer
@@ -259,12 +261,12 @@ normalizeTreeDDs t = maxTreeDDsSize >>= \maxSize -> normalizeTreeDDs' maxSize t
 flattenTreeDDs :: (DD m dd,TreeDDsMonad m) => TreeDDs dd -> m (IntMap Int,dd)
 flattenTreeDDs (NodeAndDDs dds) = do
     dds1 <- mapM (flatten) dds
-    let (sups,dds2) = unzip $ Map.toList dds1
+    let (sups,dds2) = unzip $ multiMapToList dds1
     dd <- DD.ands dds2
     return (IntMap.unions sups,(dd))
 flattenTreeDDs (NodeOrDDs dds) = do
     dds1 <- mapM (flatten) dds
-    let (sups,dds2) = unzip $ Map.toList dds1
+    let (sups,dds2) = unzip $ multiMapToList dds1
     dd <- DD.ors dds2
     return (IntMap.unions sups,(dd))
 flattenTreeDDs (LeafDDs sup dd) = return (sup,dd)
@@ -272,69 +274,81 @@ flattenTreeDDs (LeafDDs sup dd) = return (sup,dd)
 class TreeDDsMonad m where
     maxTreeDDsSize :: m Integer
 
-nodeAndDDs' :: (DD m dd,TreeDDsMonad m) => Map (IntMap Int) (TreeDDs dd) -> m (TreeDDs dd)
-nodeAndDDs' xs | Map.null xs = singleton =<< DD.true
-nodeAndDDs' xs = case isSingletonMap xs of
-    Just (_,ys) -> return ys
-    Nothing -> return $ NodeAndDDs xs
+nodeAndDDs :: [TreeDDs dd] -> (TreeDDs dd)
+nodeAndDDs xs = nodeAndDDs' $ multiMapFromList $ map (\x -> (supportTreeDDs x,x)) xs
 
-nodeAndDDs :: (DD m dd,TreeDDsMonad m) => [TreeDDs dd] -> m (TreeDDs dd)
-nodeAndDDs xs = nodeAndDDs' =<< mapFromListWithM (andTreeDDs True) (map (\x -> (supportTreeDDs x,x)) xs)
+nodeAndDDs' :: MultiMap (IntMap Int) (TreeDDs dd) -> TreeDDs dd
+nodeAndDDs' m = case isSingletonMultiMap m of
+    Just (_,y) -> y
+    Nothing -> NodeAndDDs m
 
-nodeOrDDs' :: (DD m dd,TreeDDsMonad m) => Map (IntMap Int) (TreeDDs dd) -> m (TreeDDs dd)
-nodeOrDDs' xs | Map.null xs = singleton =<< DD.false
-nodeOrDDs' xs = case isSingletonMap xs of
-    Just (_,ys) -> return ys
-    Nothing -> return $ NodeOrDDs xs
+nodeOrDDs :: [TreeDDs dd] -> (TreeDDs dd)
+nodeOrDDs xs = nodeOrDDs' $ multiMapFromList $ map (\x -> (supportTreeDDs x,x)) xs
 
-nodeOrDDs :: (DD m dd,TreeDDsMonad m) => [TreeDDs dd] -> m (TreeDDs dd)
-nodeOrDDs xs = nodeOrDDs' =<< mapFromListWithM (orTreeDDs True) (map (\x -> (supportTreeDDs x,x)) xs)
+nodeOrDDs' :: MultiMap (IntMap Int) (TreeDDs dd) -> TreeDDs dd
+nodeOrDDs' m = case isSingletonMultiMap m of
+    Just (_,y) -> y
+    Nothing -> NodeOrDDs m
 
-andTreeDDs :: forall m dd . (DD m dd,TreeDDsMonad m) => Bool -> TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
-andTreeDDs doDistribute xs@(isLeaf (Proxy @m) -> Just True) ys = return ys
-andTreeDDs doDistribute xs@(isLeaf (Proxy @m) -> Just False) ys = return xs
-andTreeDDs doDistribute xs ys@(isLeaf (Proxy @m) -> Just True) = return xs
-andTreeDDs doDistribute xs ys@(isLeaf (Proxy @m) -> Just False) = return ys
-andTreeDDs doDistribute (NodeAndDDs xs) (NodeAndDDs ys) = liftM NodeAndDDs $ mapUnionWithM (andTreeDDs False) xs ys
-andTreeDDs doDistribute (NodeAndDDs xs) y = liftM NodeAndDDs $ mapInsertWithM (andTreeDDs False) (supportTreeDDs y) (y) xs
-andTreeDDs doDistribute x (NodeAndDDs ys) = liftM NodeAndDDs $ mapInsertWithM (andTreeDDs False) (supportTreeDDs x) (x) ys
-andTreeDDs True (NodeOrDDs xs) y = nodeOrDDs =<< mapM (\x -> andTreeDDs False x y) (Map.elems xs)
-andTreeDDs True x (NodeOrDDs ys) = nodeOrDDs =<< mapM (\y -> andTreeDDs False x y) (Map.elems ys)
-andTreeDDs doDistribute x y = do
+-- joins TreeDDs with the same support set
+joinMultiTreeDDs :: (DD m dd,TreeDDsMonad m) => ([TreeDDs dd] -> m (TreeDDs dd)) -> IntMap Int -> [TreeDDs dd] -> m [TreeDDs dd]
+joinMultiTreeDDs join sup xs = do
+    maxSize <- maxTreeDDsSize
+    if sizeTrees sup > maxSize
+        then return xs
+        else liftM (:[]) $ join xs
+
+andTreeDDs :: forall m dd . (DD m dd,TreeDDsMonad m) => TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
+andTreeDDs x y = do
+    maxSize <- maxTreeDDsSize
+    let supx = supportTreeDDs x
+    let supy = supportTreeDDs y
+    let supxy = IntMap.union supx supy
+    let sizexy = sizeTrees supxy
+    if Prelude.not (IntMap.disjoint supx supy) && sizexy <= maxSize
+        then andDefault x y
+        else andTreeDDs' x y
+
+andTreeDDs' :: forall m dd . (DD m dd,TreeDDsMonad m) => TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
+andTreeDDs' xs@(isLeaf (Proxy @m) -> Just True) ys = return ys
+andTreeDDs' xs@(isLeaf (Proxy @m) -> Just False) ys = return xs
+andTreeDDs' xs ys@(isLeaf (Proxy @m) -> Just True) = return xs
+andTreeDDs' xs ys@(isLeaf (Proxy @m) -> Just False) = return ys
+andTreeDDs' (NodeAndDDs xs) (NodeAndDDs ys) = liftM NodeAndDDs $ multiMapUnionWithKeyM (joinMultiTreeDDs andsDefault) xs ys
+andTreeDDs' (NodeAndDDs xs) y = liftM NodeAndDDs $ multiMapInsertWithKeyM (joinMultiTreeDDs andsDefault) (supportTreeDDs y) (y) xs
+andTreeDDs' x (NodeAndDDs ys) = liftM NodeAndDDs $ multiMapInsertWithKeyM (joinMultiTreeDDs andsDefault) (supportTreeDDs x) (x) ys
+--andTreeDDs' x@(NodeOrDDs xs) y | supportTreeDDs y `IntMap.isSubmapOf` supportTreeDDs x = liftM nodeOrDDs' $ mapM (\x -> andTreeDDs x y) xs
+--andTreeDDs' x y@(NodeOrDDs ys) | supportTreeDDs x `IntMap.isSubmapOf` supportTreeDDs y = liftM nodeOrDDs' $ mapM (\y -> andTreeDDs x y) ys
+andTreeDDs' x y = do
+    x' <- normalizeTreeDDs x
+    y' <- normalizeTreeDDs y
+    return $ nodeAndDDs [x',y']
+
+orTreeDDs :: forall m dd . (DD m dd,TreeDDsMonad m) => TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
+orTreeDDs x y = do
     let supx = supportTreeDDs x
     let supy = supportTreeDDs y
     let supxy = IntMap.union supx supy
     let sizexy = sizeTrees supxy
     maxSize <- maxTreeDDsSize
-    if IntMap.disjoint supx supy || sizexy > maxSize
-        then do
-            x' <- normalizeTreeDDs x
-            y' <- normalizeTreeDDs y
-            nodeAndDDs [x',y']
-        else andDefault x y
+    if Prelude.not (IntMap.disjoint supx supy) && sizexy <= maxSize
+        then orDefault x y
+        else orTreeDDs' x y
 
-orTreeDDs :: forall m dd . (DD m dd,TreeDDsMonad m) => Bool -> TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
-orTreeDDs doDistribute xs@(isLeaf (Proxy @m) -> Just True) ys = return xs
-orTreeDDs doDistribute xs@(isLeaf (Proxy @m) -> Just False) ys = return ys
-orTreeDDs doDistribute xs ys@(isLeaf (Proxy @m) -> Just True) = return ys
-orTreeDDs doDistribute xs ys@(isLeaf (Proxy @m) -> Just False) = return xs
-orTreeDDs doDistribute (NodeOrDDs xs) (NodeOrDDs ys) = liftM NodeOrDDs $ mapUnionWithM (orTreeDDs False) xs ys
-orTreeDDs doDistribute (NodeOrDDs xs) y = liftM NodeOrDDs $ mapInsertWithM (orTreeDDs False) (supportTreeDDs y) (y) xs
-orTreeDDs doDistribute x (NodeOrDDs ys) = liftM NodeOrDDs $ mapInsertWithM (orTreeDDs False) (supportTreeDDs x) (x) ys
-orTreeDDs True (NodeAndDDs xs) y = nodeAndDDs =<< mapM (\x -> orTreeDDs False x y) (Map.elems xs)
-orTreeDDs True x (NodeAndDDs ys) = nodeAndDDs =<< mapM (\y -> orTreeDDs False x y) (Map.elems ys)
-orTreeDDs doDistribute x y = do
-    let supx = supportTreeDDs x
-    let supy = supportTreeDDs y
-    let supxy = IntMap.union supx supy
-    let sizexy = sizeTrees supxy
-    maxSize <- maxTreeDDsSize
-    if IntMap.disjoint supx supy || sizexy > maxSize
-        then do
-            x' <- normalizeTreeDDs x
-            y' <- normalizeTreeDDs y
-            nodeOrDDs [x',y']
-        else orDefault x y
+orTreeDDs' :: forall m dd . (DD m dd,TreeDDsMonad m) => TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
+orTreeDDs' xs@(isLeaf (Proxy @m) -> Just True) ys = return xs
+orTreeDDs' xs@(isLeaf (Proxy @m) -> Just False) ys = return ys
+orTreeDDs' xs ys@(isLeaf (Proxy @m) -> Just True) = return ys
+orTreeDDs' xs ys@(isLeaf (Proxy @m) -> Just False) = return xs
+orTreeDDs' (NodeOrDDs xs) (NodeOrDDs ys) = liftM NodeOrDDs $ multiMapUnionWithKeyM (joinMultiTreeDDs orsDefault) xs ys
+orTreeDDs' (NodeOrDDs xs) y = liftM NodeOrDDs $ multiMapInsertWithKeyM (joinMultiTreeDDs orsDefault) (supportTreeDDs y) (y) xs
+orTreeDDs' x (NodeOrDDs ys) = liftM NodeOrDDs $ multiMapInsertWithKeyM (joinMultiTreeDDs orsDefault) (supportTreeDDs x) (x) ys
+--orTreeDDs' x@(NodeAndDDs xs) y | supportTreeDDs y `IntMap.isSubmapOf` supportTreeDDs x = liftM nodeAndDDs' $ mapM (\x -> orTreeDDs x y) xs
+--orTreeDDs' x y@(NodeAndDDs ys) | supportTreeDDs x `IntMap.isSubmapOf` supportTreeDDs y = liftM nodeAndDDs' $ mapM (\y -> orTreeDDs x y) ys
+orTreeDDs' x y = do
+    x' <- normalizeTreeDDs x
+    y' <- normalizeTreeDDs y
+    return $ nodeOrDDs [x',y']
 
 instance (DD m dd,TreeDDsMonad m) => DDstructure m dd (TreeDDs dd) where
     isLeaf proxy (LeafDDs vs (dd)) = DD.isLeaf proxy dd
@@ -346,8 +360,8 @@ instance (DD m dd,TreeDDsMonad m) => DDstructure m dd (TreeDDs dd) where
         
     flatten = liftM (snd) . flattenTreeDDs 
     
-    and = andTreeDDs False
-    or = orTreeDDs False
+    and = andTreeDDs
+    or = orTreeDDs
     
     not (NodeAndDDs xs) = liftM NodeOrDDs $ mapM (not) xs
     not (NodeOrDDs xs) = liftM NodeAndDDs $ mapM (not) xs
@@ -382,10 +396,10 @@ instance (DD m dd,TreeDDsMonad m) => DDstructure m dd (TreeDDs dd) where
     
     foldCPS ands ors leaf cont (NodeAndDDs xs) = do
         tt <- leaf =<< DD.true
-        foldMapCPSM (\_ dds y -> ands y =<< foldCPS ands ors leaf return dds) tt cont xs
+        foldMultiMapCPSM (\_ dds y -> ands y =<< foldCPS ands ors leaf return dds) tt cont xs
     foldCPS ands ors leaf cont (NodeOrDDs xs) = do
         ff <- leaf =<< DD.false
-        foldMapCPSM (\_ dds y -> ors y =<< foldCPS ands ors leaf return dds) ff cont xs
+        foldMultiMapCPSM (\_ dds y -> ors y =<< foldCPS ands ors leaf return dds) ff cont xs
     foldCPS ands ors leaf cont (LeafDDs sup dd) = cont =<< leaf dd
 
 proxyTreeDDs :: Proxy dd -> Proxy (TreeDDs dd)

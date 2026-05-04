@@ -99,6 +99,7 @@ productExplicitStateSystemNBA sys nba = ExplicitStateSystem vars inits' acceptin
     states = exp_states sys
     inits2 = exp_nba_inits nba
     trans2 = exp_nba_transitions nba
+    -- all new states in the product automaton
     (_,newstates) = buildStates (Set.empty,IntMap.empty) (intSetProduct inits inits2) 
     newstatesSet = IntMap.keysSet newstates
     inits' = IntSet.intersection inits newstatesSet

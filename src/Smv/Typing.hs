@@ -59,7 +59,7 @@ addAssignTypes vs (PackedPassigns xs ys) = PackedPassigns (addDefs xs) (addDefs 
 addExprTypes :: PackedPtypes -> Pexpr -> Pexpr
 addExprTypes vs e@(Peident n _) = case Map.lookup n vs of
     Just t -> Peident n t
-    Nothing -> error $ "addExprTypes: " ++ show e ++ " " ++ show vs
+    Nothing -> error $ "addExprTypes: " ++ show e ++ "\n" ++ show vs
 addExprTypes vs e@(Pebool _) = e
 addExprTypes vs e@(Peint _) = e
 addExprTypes vs e@(Peop1 o e1) = Peop1 o (addExprTypes vs e1)

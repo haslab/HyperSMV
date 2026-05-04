@@ -30,7 +30,7 @@ import Transform.Smv
 import Transform.Substitute
 import Utils
 
---import Debug.Trace
+--import Debug.Trace as Trace
 
 data PackedBmodule = PackedBmodule
     { b_name    :: String
@@ -259,7 +259,7 @@ splitBformula restrict (smvs,f) = {-trace ("splitBformula " ++ prettyprint f)-} 
     splitForall acc e@(isSingleDimBexpr -> Just dim) = do
         st <- State.get
         case List.lookup dim st of
-            Just (Qforall,smv) -> {-trace ("adding forall LTL " ++ show dim ++ " " ++ prettyprint e) $-} do
+            Just (Qforall,smv) -> {-trace ("adding forall LTL " ++ show dim ++ " " ++ prettyprint e) $ -} do
                 case restrict (bnot $ removeDimBexpr e) smv of
                     Just smv' -> do
                         State.put $ updateAssoc (\v _ -> v) dim (Qforall,smv') st
@@ -273,7 +273,7 @@ splitBformula restrict (smvs,f) = {-trace ("splitBformula " ++ prettyprint f)-} 
     splitExists acc e@(isSingleDimBexpr -> Just dim) =  do
         st <- State.get
         case List.lookup dim st of
-            Just (Qexists,smv) -> {-trace ("adding exists LTL " ++ show dim ++ " " ++ prettyprint e) $-} do
+            Just (Qexists,smv) -> {-trace ("adding exists LTL " ++ show dim ++ " " ++ prettyprint e) $ -} do
                 case restrict (removeDimBexpr e) smv of
                     Just smv' -> do
                         State.put $ updateAssoc (\v _ -> v) dim (Qexists,smv') st

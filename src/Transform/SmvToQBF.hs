@@ -396,7 +396,7 @@ renderFormulaPident :: Int -> Pident -> QCIRnames -> GateId
 renderFormulaPident i n names =
     case Map.lookup (n,i) names of
         Just gid -> gid
-        Nothing -> error $ "renderFormulaPident: gate for name not found " ++ show i ++" "++ show n
+        Nothing -> error $ "renderFormulaPident: gate for name not found " ++ show i ++" "++ show n ++ "in \n" ++ unlines (map show $ Map.toList names)
 
 renderFormulaPidentM :: Monad m => Int -> Pident -> QCIRM m GateId
 renderFormulaPidentM i n = StrictState.gets qcir_st_names >>= return . (renderFormulaPident i n)
@@ -493,7 +493,16 @@ bddLtlToQCIR k sem render halted ltl = unroll 0 ltl
     unroll i e@(DDop1 Pg e1) = do
         qe1 <- unroll i e1
         andQCIR qe1 =<< unroll (i+1) e
-    unroll i (DDop1 Px e1) = unroll (i+1) e1
+    unroll i (DDop1 Px e1) = if (i+1) > k
+        then case sem of
+            Nothing -> boolQCIR False
+            Just Pes -> boolQCIR False
+            Just Opt -> boolQCIR True
+            Just Hpes -> andQCIR halted =<< unroll i e1
+            Just Hopt -> do
+                nothalted <- notQCIR halted
+                orQCIR nothalted =<< unroll i e1
+        else unroll (i+1) e1
     unroll i e@(DDop2 Pu e1 e2) = do
         qe1 <- unroll i e1
         qe2 <- unroll i e2

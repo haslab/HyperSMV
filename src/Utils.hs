@@ -135,6 +135,13 @@ isSingletonIntMap m = if IntMap.size m == 1
         [x] -> Just x
     else Nothing
     
+isSingletonMultiMap :: MultiMap a b -> Maybe (a,b)
+isSingletonMultiMap (MultiMap m) = do
+    (a,bs) <- isSingletonMap m
+    case bs of
+        [b] -> Just (a,b)
+        otherwise -> Nothing
+    
 {-# INLINE isConsSet #-}
 isConsSet :: Set a -> Maybe (a,Set a)
 isConsSet xs = case Set.lookupMin xs of
@@ -260,12 +267,22 @@ flipIntMapIntSafe = IntMap.foldrWithKey (\i e -> IntMap.insertWith IntSet.union 
 
 mapUnionWithM :: (Monad m,Ord a) => (b -> b -> m b) -> Map a b -> Map a b -> m (Map a b)
 mapUnionWithM merge xs ys = foldMapCPSM (\a b m -> mapInsertWithM merge a b m) xs return ys
+
+mapUnionWithKeyM :: (Monad m,Ord a) => (a -> b -> b -> m b) -> Map a b -> Map a b -> m (Map a b)
+mapUnionWithKeyM merge xs ys = foldMapCPSM (\a b m -> mapInsertWithKeyM merge a b m) xs return ys
     
 mapInsertWithM :: (Monad m,Ord a) => (b -> b -> m b) -> a -> b -> Map a b -> m (Map a b)
 mapInsertWithM merge a b m = case Map.lookup a m of
     Nothing -> return $ Map.insert a b m
     Just bOld -> do
         bNew <- merge bOld b
+        return $ Map.insert a bNew m
+
+mapInsertWithKeyM :: (Monad m,Ord a) => (a -> b -> b -> m b) -> a -> b -> Map a b -> m (Map a b)
+mapInsertWithKeyM merge a b m = case Map.lookup a m of
+    Nothing -> return $ Map.insert a b m
+    Just bOld -> do
+        bNew <- merge a bOld b
         return $ Map.insert a bNew m
 
 mapFromListWithM :: (Ord a,Monad m) => (b -> b -> m b) -> [(a,b)] -> m (Map a b)
@@ -869,6 +886,16 @@ multiMapFromList xs = MultiMap $ Map.fromListWith (++) $ map (id >< (:[])) xs
 multiMapUnion :: Ord a => MultiMap a b -> MultiMap a b -> MultiMap a b
 multiMapUnion (MultiMap xs) (MultiMap ys) = MultiMap $ Map.unionWith (++) xs ys
 
+multiMapUnionWithKey :: Ord a => (a -> [b] -> [b]) -> MultiMap a b -> MultiMap a b -> MultiMap a b
+multiMapUnionWithKey merge (MultiMap xs) (MultiMap ys) = MultiMap $ Map.unionWithKey mergeL xs ys
+    where
+    mergeL k xs ys = merge k (xs ++ ys)
+
+multiMapUnionWithKeyM :: (Monad m,Ord a) => (a -> [b] -> m [b]) -> MultiMap a b -> MultiMap a b -> m (MultiMap a b)
+multiMapUnionWithKeyM merge (MultiMap xs) (MultiMap ys) = liftM MultiMap $ mapUnionWithKeyM mergeL xs ys
+    where
+    mergeL k xs ys = merge k (xs ++ ys)
+
 multiMapToList :: MultiMap a b -> [(a,b)]
 multiMapToList (MultiMap xs) = concatMap (\(a,bs) -> map (a,) bs) $ Map.toList xs 
 
@@ -878,15 +905,28 @@ multiMapKeys (MultiMap xs) = Map.keys xs
 multiMapElems :: MultiMap a b -> [b]
 multiMapElems (MultiMap xs) = concat $ Map.elems xs
 
+multiMapInsert :: Ord a => a -> b -> MultiMap a b -> MultiMap a b
+multiMapInsert a b (MultiMap m) = MultiMap $ Map.insertWith (++) a [b] m
+
+multiMapInsertWithKey :: Ord a => (a -> [b] -> [b]) -> a -> b -> MultiMap a b -> MultiMap a b
+multiMapInsertWithKey merge a b (MultiMap m) = MultiMap $ Map.insertWithKey mergeL a [b] m
+    where
+    mergeL k xs ys = merge k (xs ++ ys)
+
+multiMapInsertWithKeyM :: (Monad m,Ord a) => (a -> [b] -> m [b]) -> a -> b -> MultiMap a b -> m (MultiMap a b)
+multiMapInsertWithKeyM merge a b (MultiMap m) = liftM MultiMap $ mapInsertWithKeyM mergeL a [b] m
+    where
+    mergeL k xs ys = merge k (xs ++ ys)
+
 foldMultiMapCPS :: (k -> a -> b -> b) -> b -> (b -> r) -> MultiMap k a -> r
 foldMultiMapCPS f z k (MultiMap xs) = foldMapCPS go z k xs
     where
-    go i ys b = foldListCPS (f i) z id ys
+    go i ys b = foldListCPS (f i) b id ys
 
 foldMultiMapCPSM :: Monad m => (k -> a -> b -> m b) -> b -> (b -> m r) -> MultiMap k a -> m r
 foldMultiMapCPSM f z k (MultiMap xs) = foldMapCPSM go z k xs
     where
-    go i ys b = foldListCPSM (f i) z return ys
+    go i ys b = foldListCPSM (f i) b return ys
 
 formatBytes :: Integer -> String
 formatBytes bytes
@@ -911,4 +951,8 @@ sepString sep [] = ""
 sepString sep [x] = x
 sepString sep (x:xs) = x ++ sep ++ sepString sep xs
 
+foldl1M :: Monad m => (a -> a -> m a) -> [a] -> m a
+foldl1M f [] = error "foldl1M"
+foldl1M f [x] = return x
+foldl1M f (x:y:zs) = f x y >>= \z -> foldl1M f (z:zs)
 
