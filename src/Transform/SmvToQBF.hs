@@ -572,23 +572,27 @@ createFinalProperty ((Qforall,gm):xs) gf = do
     orQCIR notgm =<< createFinalProperty xs gf
 createFinalProperty ((Qexists,gm):xs) gf = andQCIR gm =<< createFinalProperty xs gf
 
-constructSmvTraces :: Bool -> [(String,Quant)] -> [IntMap Subst] -> ResultValues -> IO [Maybe Trace]
-constructSmvTraces isDebug dims names res = mapM constructSmvTrace $ zip dims names
+constructSmvTraces :: Bool -> Bool -> [(String,Quant)] -> [IntMap Subst] -> ResultValues -> IO [Maybe Trace]
+constructSmvTraces isDebug doSelfLoops dims names res = mapM constructSmvTrace $ zip dims names
     where
     ress :: Subst
     ress = IntMap.foldlWithKey (\acc i b -> Map.insert (identName i) (Pebool b) acc) Map.empty res
     constructSmvTrace :: ((String,Quant),IntMap Subst) -> IO (Maybe Trace)
-    constructSmvTrace ((dim,q),vs) = traverse (fillSmvTrace isDebug) $ checkStaticTrace $ Trace desc ty (map mkState $ IntMap.toList vs)
+    constructSmvTrace ((dim,q),vs) = traverse (fillSmvTrace isDebug doSelfLoops) $ checkStaticTrace $ Trace desc ty (map mkState $ IntMap.toList vs)
         where
         ty = case q of { Qforall -> Counterexample; Qexists -> Example }
         desc = prettyprint q ++" "++ dim
         mkState (i,ss) = State (show i) False (fmap evaluateExpr $ composeSubst ss ress)
 
-fillSmvTrace :: Bool -> Trace -> IO Trace
-fillSmvTrace isDebug (Trace desc ty sts) = do
+fillSmvTrace :: Bool -> Bool -> Trace -> IO Trace
+fillSmvTrace isDebug doSelfLoops (Trace desc ty sts) = do
     sts' <- mapM fillState sts
-    return $ Trace desc ty sts'
+    let sts'' = if doSelfLoops then mapLast mkSelfLoop sts' else sts'
+    return $ Trace desc ty sts''
   where
+    mkSelfLoop :: State -> State
+    mkSelfLoop (State n _ ss) = State n True ss
+
     fillState :: State -> IO State
     fillState (State n l ss) = do
         ss' <- traverse fillExpr ss

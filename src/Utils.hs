@@ -58,6 +58,11 @@ import Control.Monad.Identity
 
 import Pretty
 
+mapLast :: (a -> a) -> [a] -> [a]
+mapLast f [] = []
+mapLast f [x] = [f x]
+mapLast f (x:xs) = x : mapLast f xs
+
 setCatMaybes :: Ord a => Set (Maybe a) -> Set a
 setCatMaybes = Set.foldl go Set.empty
     where

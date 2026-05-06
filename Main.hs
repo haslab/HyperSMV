@@ -129,6 +129,7 @@ data Args
     , splitFormula :: Maybe SplitFormulaMode
     , witness :: Bool
     , checkTotality :: Maybe CheckTotalityMode
+    , selfLoops :: Bool
     , docker :: Maybe String
     , minimize :: Maybe Bool
     , maxddsize :: Integer
@@ -237,6 +238,7 @@ defaultQBFArgs = QBF
     , sem = QCIR.Pes &= help "BMC semantics" &= name "s"
     , witness = False &= help "compute witnesses for outermost quantifier block" &= name "w"
     , checkTotality = Nothing &= help "check generated SMV models for totality"
+    , selfLoops = False &= help "since bounded semantics has no loops, invent dummy loops at the end of witness traces. these loops are not validated, so this is easily unsound."
     , qbfsolver = QCIR.Quabs &= help "QCIR solver to use" &= name "o"
     , splitFormula = Nothing &= help "split and send subexpressions of the formula to the LTLSPEC of each model (affects semantics!)"
     , docker = Nothing &= help "run solver installed inside a docker container"
@@ -571,7 +573,7 @@ solveQBF :: (Eq digest) => Args -> [(String,Quant)] -> [FilePath] -> [(digest,Pa
 solveQBF args qs infiles insmvs names qcirvars = timeIt "Running QBF solver" $ do
     QCIR.Result ty vals <- QCIR.solve (debug args) (qbfsolver args) (globalWitness args) (docker args) (globalOutformula args)
     traces <- if globalWitness args
-        then QCIR.constructSmvTraces (debug args) qs names vals
+        then QCIR.constructSmvTraces (debug args) (selfLoops args) qs names vals
         else return $ map (const Nothing) qs
     verdict <- runErrorT $ verdictQBF args qs infiles insmvs ty traces
     putStrLn $ show $ pretty ty <+> parens (printVerdict verdict)
