@@ -543,7 +543,7 @@ doQBF args infiles (insmvs,smvs,formula,names) = do
         let names' = names `composeIntSubsts` (map (IntMap.map fromNameSubst) qcirnames)
         
         if globalSolve args
-            then solveQBF args qs infiles (zip (map fst smvs) insmvs) names'
+            then solveQBF args qs infiles (zip (map fst smvs) insmvs) names' (QCIR.bdd_formula_vars $ snd bdds)
             else writeIntSubsts args names'
 
 verdictQBF :: (Eq digest) => Args -> [(String,Quant)] -> [FilePath] -> [(digest,PackedPmodule)] -> QCIR.ResultType -> [Maybe Trace] -> ErrorT IO [String]
@@ -567,11 +567,11 @@ verdictQBF args qs infiles insmvs ty traces = do
     let remaining = catMaybes $ map (\((dim,q),f,(d,smv),tr) -> if tr then Nothing else Just (d,(dim,f))) $ zip4 qs infiles insmvs fulltraces
     doNoDeadlocks args remaining
 
-solveQBF :: (Eq digest) => Args -> [(String,Quant)] -> [FilePath] -> [(digest,PackedPmodule)] -> [IntMap Subst] -> IO ()
-solveQBF args qs infiles insmvs names = timeIt "Running QBF solver" $ do
+solveQBF :: (Eq digest) => Args -> [(String,Quant)] -> [FilePath] -> [(digest,PackedPmodule)] -> [IntMap Subst] -> IntMap Pident -> IO ()
+solveQBF args qs infiles insmvs names qcirvars = timeIt "Running QBF solver" $ do
     QCIR.Result ty vals <- QCIR.solve (debug args) (qbfsolver args) (globalWitness args) (docker args) (globalOutformula args)
     traces <- if globalWitness args
-        then return $ QCIR.constructSmvTraces qs names vals
+        then QCIR.constructSmvTraces (debug args) qs names vals
         else return $ map (const Nothing) qs
     verdict <- runErrorT $ verdictQBF args qs infiles insmvs ty traces
     putStrLn $ show $ pretty ty <+> parens (printVerdict verdict)

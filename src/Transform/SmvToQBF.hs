@@ -5,6 +5,8 @@ import Data.HashSet (HashSet(..))
 import qualified Data.HashSet as HashSet
 import Data.IntSet (IntSet(..))
 import qualified Data.IntSet as IntSet
+import Data.Set (Set(..))
+import qualified Data.Set as Set
 import Data.IntMap (IntMap(..))
 import qualified Data.IntMap as IntMap
 import qualified Data.IntMap.Merge.Lazy as IntMap
@@ -570,23 +572,42 @@ createFinalProperty ((Qforall,gm):xs) gf = do
     orQCIR notgm =<< createFinalProperty xs gf
 createFinalProperty ((Qexists,gm):xs) gf = andQCIR gm =<< createFinalProperty xs gf
 
-constructSmvTraces :: [(String,Quant)] -> [IntMap Subst] -> ResultValues -> [Maybe Trace]
-constructSmvTraces dims names res = map constructSmvTrace $ zip dims names
+constructSmvTraces :: Bool -> [(String,Quant)] -> [IntMap Subst] -> ResultValues -> IO [Maybe Trace]
+constructSmvTraces isDebug dims names res = mapM constructSmvTrace $ zip dims names
     where
     ress :: Subst
     ress = IntMap.foldlWithKey (\acc i b -> Map.insert (identName i) (Pebool b) acc) Map.empty res
-    constructSmvTrace :: ((String,Quant),IntMap Subst) -> Maybe Trace
-    constructSmvTrace ((dim,q),vs) = checkStaticTrace $ Trace desc ty (map mkState $ IntMap.toList vs)
+    constructSmvTrace :: ((String,Quant),IntMap Subst) -> IO (Maybe Trace)
+    constructSmvTrace ((dim,q),vs) = traverse (fillSmvTrace isDebug) $ checkStaticTrace $ Trace desc ty (map mkState $ IntMap.toList vs)
         where
         ty = case q of { Qforall -> Counterexample; Qexists -> Example }
         desc = prettyprint q ++" "++ dim
         mkState (i,ss) = State (show i) False (fmap evaluateExpr $ composeSubst ss ress)
 
+fillSmvTrace :: Bool -> Trace -> IO Trace
+fillSmvTrace isDebug (Trace desc ty sts) = do
+    sts' <- mapM fillState sts
+    return $ Trace desc ty sts'
+  where
+    fillState :: State -> IO State
+    fillState (State n l ss) = do
+        ss' <- traverse fillExpr ss
+        return $ State n l ss'
+    fillExpr :: Pexpr -> IO Pexpr
+    fillExpr e = do
+        let vs = varSet e
+        let blanks = Map.fromSet (const $ Pebool True) vs
+        if Map.null blanks
+            then return e
+            else do
+                when isDebug $ putStrLn $ "Warning: filling unbounded QCIR variables " ++ (unwords $ map prettyPident $ Set.toList vs)
+                return $ evaluateExpr $ runIdentity $ substExpr blanks blanks True e
+
 checkStaticTrace :: Trace -> Maybe Trace
 checkStaticTrace t@(Trace desc ty sts) = if all isFreeState sts then Nothing else Just t
-    where
-    isFreeState :: State -> Bool
-    isFreeState s = all isFreeExpr (state_vars s)
+
+isFreeState :: State -> Bool
+isFreeState s = all isFreeExpr (state_vars s)
 
 
 
