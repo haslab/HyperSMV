@@ -1,37 +1,31 @@
-module Transform.Bpacked where
+-- | A 'Bexpr'-based packed SMV module representation.
+module Transform.Bexpr.Packed where
 
 import Data.Set (Set(..))
 import qualified Data.Set as Set
 import Data.Map (Map(..))
 import qualified Data.Map as Map
-import Data.HashMap.Lazy (HashMap(..))
 import qualified Data.HashMap.Lazy as HashMap
-import Data.IntMap (IntMap(..))
-import qualified Data.IntMap as IntMap
-import Control.Monad.State (State(..),StateT(..))
+import Control.Monad.State (StateT(..))
 import qualified Control.Monad.State as State
 import Data.HashSet (HashSet(..))
 import qualified Data.HashSet as HashSet
 import Control.Monad
-import qualified Data.Key as K
 import Data.List as List
 import Data.Hashable
 import Control.Monad.Identity
 import Data.Data
-import Data.Typeable
 
-import Pretty
 import Smv.Syntax hiding (p_name)
 import Smv.Typing
 import Smv.Packed
 import Transform.Pexpr
 import Transform.Bexpr
-import Transform.Smv
+import Smv.Declarative
 import Transform.Substitute
 import Utils
 
---import Debug.Trace as Trace
-
+-- | An SMV module with 'Bexpr' fields.
 data PackedBmodule = PackedBmodule
     { b_name    :: String
     , b_vars    :: PackedBvars
@@ -42,6 +36,7 @@ data PackedBmodule = PackedBmodule
     , b_ltlspec :: Maybe Bexpr
     } deriving (Eq,Show)
 
+-- | Drops variables unused elsewhere.
 dropUnusedBmoduleVars :: Set Pident -> PackedBmodule -> PackedBmodule
 dropUnusedBmoduleVars other_used p = p { b_vars = vars' }
     where
@@ -49,9 +44,11 @@ dropUnusedBmoduleVars other_used p = p { b_vars = vars' }
     used_vars = Set.unions $ map bvarSet (Map.elems $ b_defines p) ++ [bvarSet (b_init p),bvarSet (b_invar p),bvarSet (b_trans p),maybe Set.empty bvarSet (b_ltlspec p),other_used]
     vars' = Map.filterWithKey (\n t -> Set.member n used_vars) (b_vars p)
     
+-- | Clears a module's LTLSPEC.
 dropBLTLSpec :: PackedBmodule -> PackedBmodule
 dropBLTLSpec p = p { b_ltlspec = Nothing }
 
+-- | Conjoins a formula into a module's LTLSPEC.
 addBLTLSpec :: Bexpr -> PackedBmodule -> PackedBmodule
 addBLTLSpec (Bop1 Pg e1) p | not (isLTLBexpr e1) = p { b_invar = band (b_invar p) e1 }
 addBLTLSpec e p = p { b_ltlspec = add (b_ltlspec p) e }
@@ -59,23 +56,30 @@ addBLTLSpec e p = p { b_ltlspec = add (b_ltlspec p) e }
     add Nothing y = Just y
     add (Just x) y = Just (band x y)
     
+-- | Folds a G-formula into INVAR, if possible.
 addBLTLSpecInvar :: Bexpr -> PackedBmodule -> Maybe PackedBmodule
 addBLTLSpecInvar (Bop1 Pg e1) p | not (isLTLBexpr e1) = Just $ p { b_invar = band (b_invar p) e1 }
 addBLTLSpecInvar e p = Nothing
     
+-- | Variable declarations of a 'PackedBmodule'.
 type PackedBvars = PackedPvars
 
+-- | A substitution mapping names to 'Bexpr's.
 type BSubst = Map Pident Bexpr
 
+-- | Converts a 'Subst' to a 'BSubst'.
 toBSubst :: Monad m => Subst -> BM m BSubst
 toBSubst ss = mapM toBexpr ss
 
+-- | Identity 'BSubst' over a variable set.
 packedBSubst :: PackedBvars -> BSubst
 packedBSubst = Map.mapWithKey (\n t -> Bvar (n,False) $ toVarType t)
 
+-- | Converts and inlines a 'PackedPmodule'.
 toInlinedPackedBmodule :: Monad m => PackedPmodule -> StateT BState m PackedBmodule
 toInlinedPackedBmodule = toPackedBmodule >=> inlinePackedBmodule
 
+-- | Inlines a module's definitions into its fields.
 inlinePackedBmodule :: Monad m => PackedBmodule -> StateT BState m PackedBmodule
 inlinePackedBmodule b = do
     let name = b_name b
@@ -89,6 +93,7 @@ inlinePackedBmodule b = do
         --trace ("invar "++prettyprint invar')
         return $ PackedBmodule name vars Map.empty init' invar' trans' ltlspec'
     
+-- | Converts a 'PackedPmodule' to a 'PackedBmodule'.
 toPackedBmodule :: Monad m => PackedPmodule -> StateT BState m PackedBmodule
 toPackedBmodule p0 = transformDeclarative p0 >>= \p -> do
     let name = p_name p
@@ -104,9 +109,11 @@ toPackedBmodule p0 = transformDeclarative p0 >>= \p -> do
         return $ PackedBmodule name vars defs' init' invar' trans' ltlspec'
     return b
 
+-- | Adds definitions to a 'PackedBmodule'.
 addBmoduleDefines :: BSubst -> PackedBmodule -> PackedBmodule
 addBmoduleDefines ss b = b { b_defines = Map.union (b_defines b) ss }
     
+-- | Converts a 'PackedBmodule' back to a 'PackedPmodule'.
 fromPackedBmodule :: Monad m => PackedBmodule -> StateT BState m PackedPmodule
 fromPackedBmodule b = do
     let name = b_name b
@@ -117,9 +124,10 @@ fromPackedBmodule b = do
         invar' <- fromBexpr $ b_invar b
         trans' <- fromBexpr $ b_trans b
         ltlspec' <- mapM fromBexpr $ b_ltlspec b
-        return $ PackedPmodule name vars defines' init' invar' trans' noPackedPassigns ltlspec'
+        return $ PackedPmodule name vars defines' init' invar' trans' noPackedPassigns ltlspec' []
     return p
 
+-- | Converts a 'BSubst' to a 'Subst'.
 unsafeFromBSubst :: BSubst -> Subst
 unsafeFromBSubst ss = runIdentity $ doBM Map.empty (fromBSubst ss)
 
@@ -139,19 +147,23 @@ fromBSubst biss = do
         State.modify $ id >< HashMap.insert e (Peident n $ typeOfBexpr e) -- restore the definition
         return $ Map.insert n e' acc
 
+-- | Converts a 'Subst' to 'PackedPdefs'.
 fromSubst :: Monad m => Subst -> BM m PackedPdefs
 fromSubst ss = toBSubst ss >>= fromBSubst
 
+-- | Folds INVAR into INIT\/TRANS.
 transformNoInvarB :: Monad m => PackedBmodule -> m PackedBmodule
-transformNoInvarB p = {-trace (prettyprint (b_invar p) ++ " b_invar") $-} do
+transformNoInvarB p = do
     let definedVars = Map.keysSet (b_vars p)
     let init' = bands $ HashSet.fromList [b_init p,b_invar p]
     let trans' = bands $ HashSet.fromList [b_trans p,bnext (b_invar p)] -- we could but don't apply the invar to the pre-state, to keep the formula more general
     return $ p { b_init = init', b_invar = Bbool True, b_trans = trans' }
 
+-- | Prefixes a 'BSubst' for one trace.
 toHyperBSubst :: String -> BSubst -> BSubst
 toHyperBSubst h s = Map.foldrWithKey (\n e -> Map.insert (toHyperPident h n) (toHyperBexpr h e)) Map.empty s
 
+-- | Prefixes a 'Bexpr''s variables for one trace.
 toHyperBexpr :: String -> Bexpr -> Bexpr
 toHyperBexpr h e@(Bbool {}) = e
 toHyperBexpr h e@(Bints {}) = e
@@ -160,6 +172,7 @@ toHyperBexpr h (Bop1 o e1) = Bop1 o (toHyperBexpr h e1)
 toHyperBexpr h (Bop2 o e1 e2) = Bop2 o (toHyperBexpr h e1) (toHyperBexpr h e2)
 toHyperBexpr h (Bopn o es) = Bopn o (HashSet.map (toHyperBexpr h) es)
 
+-- | Substitutes per-trace 'BSubst's into a 'Bformula'.
 substBformula :: Monad m => [BSubst] -> Bool -> Bformula -> m Bformula
 substBformula sss recurse = substBformula' Map.empty sss
     where
@@ -188,17 +201,38 @@ substBexpr mleft mright recurse (Bopn o es) = do
     es' <- mapHashSetM (substBexpr mleft mright recurse) es
     return $ bopn o es'
 
+-- | Conjoins init\/invar into a module.
 addBmoduleInvariants :: (Bexpr,Bexpr) -> PackedBmodule -> PackedBmodule
 addBmoduleInvariants (init,invar) p = p { b_init = b_init p `band` init, b_invar = b_invar p `band` invar }
 
-splitBformulaDigestBmodule :: SplitFormulaMode -> ([(digest,PackedBmodule)],Bformula) -> ([((digest,Int),PackedBmodule)],Bformula)
-splitBformulaDigestBmodule mode = splitBformulaDigest restrict (hash . b_ltlspec)
+-- | Push single-trace subformulas into the models' LTLSPEC, declining pure liveness under 'LTL'.
+splitBformulaDigestBmoduleM :: Monad m => (PackedBvars -> Bexpr -> m Bool) -> SplitFormulaMode
+                            -> ([(digest,PackedBmodule)],Bformula)
+                            -> m ([((digest,Int),PackedBmodule)],Bformula)
+splitBformulaDigestBmoduleM memoryless mode = splitBformulaDigestM restrict (hash . b_ltlspec)
     where
     restrict e p = case mode of
-        LTL -> Just (addBLTLSpec e p)
-        Invar -> addBLTLSpecInvar e p
-        NoSplitFormula -> Nothing
+        LTL -> do
+            -- the free invariant shape never reaches an automaton
+            ok <- if isFreeInvarShape e then return True else memoryless (b_vars p) e
+            return $ if ok then Just (addBLTLSpec e p) else Nothing
+        Invar -> return (addBLTLSpecInvar e p)
+        NoSplitFormula -> return Nothing
 
+-- | @G e@ with @e@ non-temporal: 'addBLTLSpec' folds it into `b_invar`, so it costs nothing.
+isFreeInvarShape :: Bexpr -> Bool
+isFreeInvarShape (Bop1 Pg e1) = not (isLTLBexpr e1)
+isFreeInvarShape _ = False
+
+-- | Digest-rehashing wrapper over 'splitBformulaM'.
+splitBformulaDigestM :: Monad m => (Bexpr -> model -> m (Maybe model)) -> (model -> Int)
+                     -> ([(digest,model)],Bformula) -> m ([((digest,Int),model)],Bformula)
+splitBformulaDigestM restrict rehash (smvs,f) = do
+    let (digests,bsmvs) = unzip smvs
+    (bsmvs',f') <- splitBformulaM restrict (bsmvs,f)
+    return (map (\(d,b) -> ((d,rehash b),b)) (zip digests bsmvs'),f')
+
+-- | Pure digest-rehashing wrapper over 'splitBformula'.
 splitBformulaDigest :: (Bexpr -> model -> Maybe model) -> (model -> Int) -> ([(digest,model)],Bformula) -> ([((digest,Int),model)],Bformula)
 splitBformulaDigest restrict rehash (smvs,f) = (map addLTLHash $ zip digests bsmvs',f')
     where
@@ -206,6 +240,7 @@ splitBformulaDigest restrict rehash (smvs,f) = (map addLTLHash $ zip digests bsm
     (bsmvs',f') = splitBformula restrict (bsmvs,f)
     addLTLHash (d,b) = ((d,rehash b),b)
 
+-- | How to push single-trace subformulas out.
 data SplitFormulaMode
     = Invar 
     | LTL 
@@ -214,31 +249,29 @@ data SplitFormulaMode
 
 -- note: need to check that exists are non-empty for prenex NF
 splitBformula :: (Bexpr -> model -> Maybe model) -> ([model],Bformula) -> ([model],Bformula)
-splitBformula restrict (smvs,f) = {-trace ("splitBformula " ++ prettyprint f)-} (smvs',applyQuantsBexpr qs' e')
+splitBformula restrict x = runIdentity $ splitBformulaM (\e m -> Identity (restrict e m)) x
+
+-- | Push single-trace subformulas into the corresponding model, in a monad.
+splitBformulaM :: Monad m => (Bexpr -> model -> m (Maybe model)) -> ([model],Bformula) -> m ([model],Bformula)
+splitBformulaM restrict (smvs,f) = do
+    (e',st') <- State.runStateT (splitBexpr e) st0
+    let (qs',smvs') = unzip $ map assocl st'
+    return (smvs',applyQuantsBexpr qs' e')
     where
     qs = quantsBformula f
     e = exprBformula f
     st0 = map assocr $ zip qs smvs
-    (e',(unzip . map assocl) -> (qs',smvs')) = State.runState (splitBexpr e) st0
     
-    --joinSingles :: Bexpr -> Bexpr
-    --joinSingles (Bopn op (HashSet.toList -> es)) = bopn op es'
-    --    where
-    --    des = map (\e -> (e,isSingleDimBexpr e)) es
-    --    es' = HashSet.fromList $ map (Bopn op . HashSet.fromList . map fst) $ groupBy (\x y -> snd x == snd y) des
-    --joinSingles e = e
-    
---    splitBexpr :: Bexpr -> State ([(String,(Quant,model))]) Bexpr
-    splitBexpr (Bopn Por es) = do
-        e' <- liftM bfor $ foldM splitForall HashSet.empty es
-        case e' of
-            Bopn Por _ -> return e'
-            otherwise -> splitBexpr e'
-    splitBexpr (Bopn Pand es) = do
-        e' <- liftM bgand $ foldM splitExists HashSet.empty es
-        case e' of
-            Bopn Pand _ -> return e'
-            otherwise -> splitBexpr e'
+    -- Re-split to a fixpoint: pushing a subformula in rewrites the residual and can expose further
+    -- splits. 
+    splitBexpr e@(Bopn Por es) = do
+        (acc,didSplit) <- foldM splitForall (HashSet.empty,False) es
+        let e' = bfor acc
+        if didSplit then splitBexpr e' else return e'
+    splitBexpr e@(Bopn Pand es) = do
+        (acc,didSplit) <- foldM splitExists (HashSet.empty,False) es
+        let e' = bgand acc
+        if didSplit then splitBexpr e' else return e'
     splitBexpr e = return e
     
     bfor :: HashSet Bexpr -> Bexpr
@@ -255,33 +288,33 @@ splitBformula restrict (smvs,f) = {-trace ("splitBformula " ++ prettyprint f)-} 
         go (l,r) (Bop1 Pg e) = (l,HashSet.insert e r)
         go (l,r) e = (HashSet.insert e l,r)
     
---    splitForall :: HashSet Bexpr -> Bexpr -> State ([(String,(Quant,model))]) (HashSet Bexpr)
-    splitForall acc e@(isSingleDimBexpr -> Just dim) = do
+    splitForall (acc,ch) e@(isSingleDimBexpr -> Just dim) = do
         st <- State.get
         case List.lookup dim st of
-            Just (Qforall,smv) -> {-trace ("adding forall LTL " ++ show dim ++ " " ++ prettyprint e) $ -} do
-                case restrict (bnot $ removeDimBexpr e) smv of
+            Just (Qforall,smv) -> do
+                r <- State.lift $ restrict (bnot $ removeDimBexpr e) smv
+                case r of
                     Just smv' -> do
                         State.put $ updateAssoc (\v _ -> v) dim (Qforall,smv') st
-                        return acc
-                    Nothing -> return (HashSet.insert e acc)
-            otherwise -> return (HashSet.insert e acc)
+                        return (acc,True)
+                    Nothing -> return (HashSet.insert e acc,ch)
+            otherwise -> return (HashSet.insert e acc,ch)
     splitForall acc (Bop1 Pf (Bopn Por es)) = foldM splitForall acc (HashSet.map (Bop1 Pf) es)
-    splitForall acc e = return (HashSet.insert e acc)
+    splitForall (acc,ch) e = return (HashSet.insert e acc,ch)
     
-    --splitExists :: HashSet Bexpr -> Bexpr -> State ([(String,(Quant,model))]) (HashSet Bexpr)
-    splitExists acc e@(isSingleDimBexpr -> Just dim) =  do
+    splitExists (acc,ch) e@(isSingleDimBexpr -> Just dim) = do
         st <- State.get
         case List.lookup dim st of
-            Just (Qexists,smv) -> {-trace ("adding exists LTL " ++ show dim ++ " " ++ prettyprint e) $ -} do
-                case restrict (removeDimBexpr e) smv of
+            Just (Qexists,smv) -> do
+                r <- State.lift $ restrict (removeDimBexpr e) smv
+                case r of
                     Just smv' -> do
                         State.put $ updateAssoc (\v _ -> v) dim (Qexists,smv') st
-                        return acc
-                    Nothing -> return (HashSet.insert e acc)
-            otherwise -> return (HashSet.insert e acc)
+                        return (acc,True)
+                    Nothing -> return (HashSet.insert e acc,ch)
+            otherwise -> return (HashSet.insert e acc,ch)
     splitExists acc (Bop1 Pg (Bopn Pand es)) = foldM splitExists acc (HashSet.map (Bop1 Pg) es)
-    splitExists acc e = return (HashSet.insert e acc)
+    splitExists (acc,ch) e = return (HashSet.insert e acc,ch)
     
 
 

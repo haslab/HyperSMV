@@ -1,3 +1,4 @@
+-- | Pretty-printer for the Alloy AST.
 module Alloy.Pretty where
 
 import Prettyprinter
@@ -5,7 +6,6 @@ import Prelude hiding ((<>))
 
 import Pretty
 import Alloy.Syntax
-import Utils
 
 instance Pretty Alloy where
     pretty (Alloy imports items) = vcat (map pretty imports ++ map pretty items)
@@ -19,10 +19,13 @@ instance Pretty Item where
         [l] -> pretty "//" <+> pretty l
         (l:ls) -> nest 2 $ vcat (pretty "/*" <+> pretty l : map pretty ls ++ [pretty "*/"])
     pretty (ItemSig s) = pretty s
+    pretty (ItemCheck n e steps expect) =
+        (nest 2 $ vcat [pretty "check" <+> pretty n <+> pretty '{', pretty e])
+        <> line <> pretty '}' <+> pretty "for" <+> pretty steps <+> pretty "steps expect" <+> pretty expect
 
 instance Pretty Import where
-    pretty (Import n Nothing) = pretty "open" <+> pretty "module" <+> pretty n
-    pretty (Import n (Just s)) = pretty "open" <+> pretty "module" <> pretty n <> pretty '[' <> pretty n <> pretty ']'
+    pretty (Import n Nothing) = pretty "open" <+> pretty n
+    pretty (Import n (Just alias)) = pretty "open" <+> pretty n <+> pretty "as" <+> pretty alias
 
 instance Pretty Sig where
     pretty (DefSig n e) = pretty "sig" <+> pretty n <+> pretty "=" <+> pretty e <+> pretty "{}"
@@ -39,18 +42,22 @@ instance Pretty Field where
     pretty (Field True n mult rel) = pretty "var" <+> pretty n <+> pretty ':' <+> prettyMult mult (pretty rel)
     pretty (Field False n mult rel) = pretty n <+> pretty ':' <+> prettyMult mult (pretty rel)
     
+-- | Prefix a document with its multiplicity.
 prettyMult :: Maybe Multiplicity -> Doc ann -> Doc ann
 prettyMult Nothing doc = doc
 prettyMult (Just m) doc = pretty m <+> doc
 
+-- | Suffix a signature with its 'extends' clause.
 prettyExtends :: Extends -> Doc ann -> Doc ann
 prettyExtends Nothing doc = doc
 prettyExtends (Just e) doc = pretty "extends" <+> pretty e <+> doc
 
+-- | Prefix with 'abstract' if set.
 prettyIsAbstract :: Bool -> Doc ann -> Doc ann
 prettyIsAbstract False doc = doc
 prettyIsAbstract True doc = pretty "abstract" <+> doc
 
+-- | Prefix with 'trace' if set.
 prettyIstrace :: Bool -> Doc ann -> Doc ann
 prettyIstrace False doc = doc
 prettyIstrace True doc = pretty "trace" <+> doc
@@ -58,6 +65,7 @@ prettyIstrace True doc = pretty "trace" <+> doc
 instance Pretty Relation where
     pretty (Relation xs) = prettyRelation xs
     
+-- | Render a relation's column types.
 prettyRelation :: [(Expr,Maybe Multiplicity)] -> Doc ann
 prettyRelation [(e,mult)] = prettyMult mult (pretty e)
 prettyRelation ((e,mult):es) = pretty e <+> prettyMult mult (pretty "->") <+> prettyRelation es
@@ -77,12 +85,15 @@ instance Pretty Pred where
 instance Pretty Fun where
     pretty (Fun n args ret f) = nest 2 $ vcat [pretty "fun" <+> pretty n <> prettyArgs args <+> pretty ':' <+> pretty ret <+> pretty '{' , pretty f , pretty '}']
         
+-- | Render a bracketed argument list.
 prettyArgs :: [(String,Relation)] -> Doc ann
 prettyArgs [] = pretty ""
 prettyArgs args = pretty '[' <> sepBy (pretty ',') (map prettyArg args) <> pretty ']'
+-- | Render one 'name : relation' argument.
 prettyArg :: (String,Relation) -> Doc ann
 prettyArg (n,r) = pretty n <+> pretty ':' <+> pretty r
 
+-- | Render an Alloy expression.
 prettyExpr :: Expr -> Doc ann
 prettyExpr (Expr1 o e2) = pretty o <+> parens (prettyExpr e2)
 prettyExpr (Expr2 e1 o e2) = sepBy (pretty o) (map pParensPrintExpr $ flattenExpr2 o [e1,e2])
@@ -93,7 +104,9 @@ prettyExpr (VarExpr n) = pretty n
 prettyExpr (ExprNone) = pretty "none"
 prettyExpr (ApplyExpr (VarExpr n) es) = pretty n <> pretty '[' <> sepBy (pretty ',') (map pretty es) <> pretty ']'
 prettyExpr (ApplyExpr e es) = parens (pretty e) <> pretty '[' <> sepBy (pretty ',') (map pretty es) <> pretty ']'
+prettyExpr (QuantExpr q v sig body) = pretty q <+> pretty v <+> pretty ':' <+> pretty sig <+> pretty '|' <+> prettyExpr body
 
+-- | Render an expression, parenthesising if needed.
 pParensPrintExpr :: Expr -> Doc ann
 pParensPrintExpr e@(VarExpr {}) = prettyExpr e
 pParensPrintExpr e@(ExprBool {}) = prettyExpr e
@@ -101,6 +114,7 @@ pParensPrintExpr e@(NextExpr {}) = prettyExpr e
 pParensPrintExpr e@(ExprNone {}) = prettyExpr e
 pParensPrintExpr e = parens (prettyExpr e)
 
+-- | Flatten a chain of one commutative operator.
 flattenExpr2 :: Op2 -> [Expr] -> [Expr]
 flattenExpr2 op [] = []
 flattenExpr2 op (Expr2 e1 op' e2:es) | isCommutative op && op == op' = flattenExpr2 op (e1:e2:es)
@@ -126,5 +140,10 @@ instance Pretty Op2 where
     pretty OpIff = pretty "iff"
     pretty OpArrow = pretty "->"
     pretty OpImplies = pretty "implies"
+    pretty OpUntil = pretty "until"
+
+instance Pretty Quant where
+    pretty QSome = pretty "some"
+    pretty QAll = pretty "all"
 
 

@@ -103,6 +103,18 @@ import Location as L
 
 ident :: { Located String }
     : NID { $1 }
+
+-- | A TRACE VARIABLE name, as it appears after @_@ in AutoHyper's @{"v"_A}@ syntax.
+tident :: { Located String }
+    : NID { $1 }
+    | F { mk_loc (loc $1) "F" }
+    | G { mk_loc (loc $1) "G" }
+    | X { mk_loc (loc $1) "X" }
+    | U { mk_loc (loc $1) "U" }
+    | V { mk_loc (loc $1) "V" }
+    | Y { mk_loc (loc $1) "Y" }
+    | Z { mk_loc (loc $1) "Z" }
+    | H { mk_loc (loc $1) "H" }
     
 --  * -------------------------------------------------------------------- *)
 
@@ -114,7 +126,7 @@ dim :: { Located Pexpr }
 
 pident :: { Located Pident }
     : ident dims { mk_loc (loc $1) $ Pident (unloc $1) (unloc $2) }
-    | AHSTART pident AHEND ident { mk_loc (loc $1) $ addDimPident (unloc $2) (mkQuantDim (unloc $4)) }
+    | AHSTART pident AHEND tident { mk_loc (loc $1) $ addDimPident (unloc $2) (mkQuantDim (unloc $4)) }
 
 pterm :: { Located Pexpr }
     : pident { lmap (\n -> Peident n EUnknown) $1 }
@@ -123,7 +135,7 @@ pterm :: { Located Pexpr }
     | FALSE { mk_loc (loc $1) (Pebool False) }
     | INT { mk_loc (loc $1) (Peint $ unloc $1) }
     | parens(pexpr) { $1 }
-    | LBRACE rtuple(pexpr) RBRACE { mk_loc (loc $1) (pset $ map unloc $ unloc $2) }
+    | LBRACE rtuple(pexpr) RBRACE { mk_loc (loc $1) (pbraces $ map unloc $ unloc $2) }
     | CASE_START list(pcase) CASE_END { mk_loc (loc $1) $ Pecase $ map unloc $2 }
     
     | X   pterm { mk_loc (loc $1) (Peop1 Px (unloc $2)) }

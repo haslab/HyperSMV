@@ -1,23 +1,16 @@
+-- | Structured combinations of DDs.
 module Data.DDs where
     
 import Prelude hiding (not,or,and)
 import qualified Prelude
 import Control.Monad
-import Data.Maybe
 import qualified Data.Foldable as Foldable
 import Data.IntSet (IntSet(..))
 import qualified Data.IntSet as IntSet
-import Data.Set (Set(..))
-import qualified Data.Set as Set
 import Data.Map (Map(..))
 import qualified Data.Map as Map
-import qualified Data.Map.Merge.Lazy as Map
 import Data.IntMap (IntMap(..))
 import qualified Data.IntMap as IntMap
-import qualified Data.IntMap.Merge.Lazy as IntMap
-import Control.Monad.Reader (MonadReader(..))
-import qualified Control.Monad.Reader as Reader
-import qualified Data.Foldable as Foldable
 import Data.Hashable as Hashable
 import GHC.Generics as Generics
 import Data.Proxy
@@ -28,10 +21,8 @@ import Prettyprinter
 import Data.DD (DD)
 import qualified Data.DD as DD
 import Utils
-import Pretty
 
---import Debug.Trace as Trace
-
+-- | Boolean structure built from and reducible to a 'DD'.
 class (DD m dd,Show s) => DDstructure m dd s | s -> dd where
     isLeaf :: Proxy m -> s -> (Maybe Bool)
     
@@ -98,10 +89,9 @@ class (DD m dd,Show s) => DDstructure m dd s | s -> dd where
     ors xs = DD.false >>= singleton >>= \z -> Foldable.foldlM or z xs
     orsDefault xs = DD.false >>= singleton >>= \z -> Foldable.foldlM orDefault z xs
     
-    -- ands,ors,leaf,cont
     foldCPS :: (b -> b -> m b) -> (b -> b -> m b) -> (dd -> m b) -> (b -> m r) -> s -> m r
     
--- conjunction of independent DDs (map of used variables to DD)
+-- | Conjunction of independent DDs (map of used variables to DD)
 newtype AndDDs dd = AndDDs { unAndDDs :: Map IntSet dd } deriving (Eq,Show,Generic,Hashable)
 
 instance Pretty dd => Pretty (AndDDs dd) where
@@ -131,6 +121,7 @@ instance (DD m dd) => DDstructure m dd (AndDDs dd) where
         tt <- leaf =<< DD.true
         foldMapCPSM (\i dd b -> ands b =<< leaf dd) tt cont xs
 
+-- | Normalise a list of (support, DD) pairs into an 'AndDDs'.
 normalizeAndDDs :: DD m dd => [(IntSet,dd)] -> m (AndDDs dd)
 normalizeAndDDs = liftM (AndDDs . Map.fromList) . foldM (insertDD Proxy) []
     where
@@ -141,19 +132,13 @@ normalizeAndDDs = liftM (AndDDs . Map.fromList) . foldM (insertDD Proxy) []
         then liftM ((s1,t1):) (insertDD proxy m (s2,t2))
         else DD.and t1 t2 >>= \t12 -> insertDD proxy m (IntSet.union s1 s2,t12)
 
--- conjunction of assignments to independent next variables (map of used next variables to DD)
+-- Conjunction of assignments to independent next variables (map of used next variables to DD)
 newtype NextDDs dd = NextDDs { unNextDDs :: Map IntSet dd } deriving (Eq,Show,Generic,Hashable)
 
 instance Pretty dd => Pretty (NextDDs dd) where
     pretty (NextDDs dds) = vcat $ pretty "&" : (map pretty $ Map.elems dds)
 
---joinAssigns :: Eq v => IntMap v -> IntMap v -> [IntMap v]
---joinAssigns xs ys = IntMap.mergeA whenL whenR whenLR xs ys
---    where
---    whenL = IntMap.traverseMissing (\i x -> [x])
---    whenR = IntMap.traverseMissing (\i y -> [y])
---    whenLR = IntMap.zipWithAMatched (\i x y -> if x == y then [x] else [])
-
+-- | Monads tracking next-to-current variable mappings.
 class Monad m => NextDDsMonad m where
     dd_nexts :: m (IntMap Int) -- mapping from next ids to past ids
     dd_nextIds :: m IntSet
@@ -184,6 +169,7 @@ instance (DD m dd,NextDDsMonad m) => DDstructure m dd (NextDDs dd) where
         tt <- leaf =<< DD.true
         foldMapCPSM (\i dd b -> ands b =<< leaf dd) tt cont xs
 
+-- | Normalise a list of (support, DD) pairs into a 'NextDDs'.
 normalizeNextDDs :: DD m dd => [(IntSet,dd)] -> m (NextDDs dd)
 normalizeNextDDs = liftM (NextDDs . Map.fromList) . foldM (insertDD Proxy) []
     where
@@ -194,6 +180,7 @@ normalizeNextDDs = liftM (NextDDs . Map.fromList) . foldM (insertDD Proxy) []
         then liftM ((s1,t1):) (insertDD proxy m (s2,t2))
         else DD.and t1 t2 >>= \t12 -> insertDD proxy m (IntSet.union s1 s2,t12)
 
+-- | Variables whose next and current value agree in every solution.
 frozenDDs :: (DDstructure m dd s,NextDDsMonad m) => s -> m IntSet
 frozenDDs s = do
     vs :: [(Int,Int)] <- liftM IntMap.toList dd_nexts
@@ -208,9 +195,11 @@ frozenDDs s = do
         (Just x,Just y) -> x == y
         otherwise -> False
 
+-- | Identity relation over next/current variable pairs.
 dd_identity :: (DDstructure m dd s,NextDDsMonad m) => m s
 dd_identity = dd_identity' Proxy
 
+-- | 'dd_identity' with an explicit diagram-type proxy.
 dd_identity' :: (DDstructure m dd s,NextDDsMonad m) => Proxy dd -> m s
 dd_identity' (proxy::Proxy dd) = do
     nexts <- dd_nexts
@@ -224,6 +213,7 @@ dd_identity' (proxy::Proxy dd) = do
             singleton =<< DD.ors eqs
     ands =<< K.mapWithKeyM mkId nexts
 
+-- | A tree of And/Or DD partitions, collapsible to a single diagram.
 data TreeDDs dd
     = NodeAndDDs (MultiMap (IntMap Int) (TreeDDs dd))
     | NodeOrDDs (MultiMap (IntMap Int) (TreeDDs dd))
@@ -237,27 +227,35 @@ instance Pretty dd => Pretty (TreeDDs dd) where
     
 instance Hashable dd => Hashable (TreeDDs dd)
 
+-- | The variables a 'TreeDDs' depends on.
 supportTreeDDs :: TreeDDs dd -> IntMap Int
 supportTreeDDs (NodeAndDDs dds) = IntMap.unions $ multiMapKeys dds
 supportTreeDDs (NodeOrDDs dds) = IntMap.unions $ multiMapKeys dds
 supportTreeDDs (LeafDDs vs _) = vs
 
+-- | Number of valuations over the given variable domain sizes.
 sizeTrees :: IntMap Int -> Integer
 sizeTrees is = if IntMap.null js then 1 else product js
     where js = IntMap.filter (>0) $ IntMap.map toEnum is
 
+-- | Number of valuations a 'TreeDDs' ranges over.
 sizeTreeDDs :: TreeDDs dd -> Integer
 sizeTreeDDs = sizeTrees . supportTreeDDs
 
+-- | Collapse subtrees under the support-accept budget into leaves.
 normalizeTreeDDs :: (DD m dd,TreeDDsMonad m) => TreeDDs dd -> m (TreeDDs dd)
-normalizeTreeDDs t = maxTreeDDsSize >>= \maxSize -> normalizeTreeDDs' maxSize t
+normalizeTreeDDs t = go t
     where
-    normalizeTreeDDs' :: (DD m dd,TreeDDsMonad m) => Integer -> TreeDDs dd -> m (TreeDDs dd)
-    normalizeTreeDDs' maxSize x | sizeTreeDDs x <= maxSize = liftM (uncurry LeafDDs) $ flattenTreeDDs x
-    normalizeTreeDDs' maxSize (NodeAndDDs dds) = liftM NodeAndDDs $ mapM ((normalizeTreeDDs' maxSize)) dds
-    normalizeTreeDDs' maxSize (NodeOrDDs dds) = liftM NodeOrDDs $ mapM ((normalizeTreeDDs' maxSize)) dds
-    normalizeTreeDDs' maxSize x@(LeafDDs {}) = return x
+    go :: (DD m dd,TreeDDsMonad m) => TreeDDs dd -> m (TreeDDs dd)
+    go x = do
+        acc <- treeSupportAccept
+        if sizeTreeDDs x <= acc then liftM (uncurry LeafDDs) (flattenTreeDDs x) else go' x
+    go' :: (DD m dd,TreeDDsMonad m) => TreeDDs dd -> m (TreeDDs dd)
+    go' (NodeAndDDs dds) = liftM NodeAndDDs $ mapM go dds
+    go' (NodeOrDDs dds) = liftM NodeOrDDs $ mapM go dds
+    go' x@(LeafDDs {}) = return x
 
+-- | Flatten a 'TreeDDs' into a single (support, DD) pair.
 flattenTreeDDs :: (DD m dd,TreeDDsMonad m) => TreeDDs dd -> m (IntMap Int,dd)
 flattenTreeDDs (NodeAndDDs dds) = do
     dds1 <- mapM (flatten) dds
@@ -271,44 +269,134 @@ flattenTreeDDs (NodeOrDDs dds) = do
     return (IntMap.unions sups,(dd))
 flattenTreeDDs (LeafDDs sup dd) = return (sup,dd)
 
-class TreeDDsMonad m where
-    maxTreeDDsSize :: m Integer
+-- | Monads that can build 'TreeDDs', exposing the support-accept budget a merge may accept.
+class TreeDDsMonad (m :: * -> *) where
+    treeSupportAccept :: m Integer
 
+-- Try to collapse a whole TreeDDs to one monolithic BDD, respecting its And/Or structure, aborting to Nothing once the attempt would materialise more than `budget` fresh nodes in total.
+monoBounded :: (DD m dd,TreeDDsMonad m) => Integer -> TreeDDs dd -> m (Maybe dd)
+monoBounded budget t = liftM (fmap fst) (monoBoundedFrom budget t)
+
+-- | 'monoBounded' threading a shared remaining allowance, and returning what is left of it.
+monoBoundedFrom :: (DD m dd,TreeDDsMonad m) => Integer -> TreeDDs dd -> m (Maybe (dd,Integer))
+monoBoundedFrom remaining (LeafDDs _ dd) = return (Just (dd,remaining))
+monoBoundedFrom remaining (NodeAndDDs dds) = combineBounded remaining DD.true DD.andBounded (multiMapElems dds)
+monoBoundedFrom remaining (NodeOrDDs dds) = combineBounded remaining DD.false DD.orBounded (multiMapElems dds)
+
+-- | Fold a bounded binary operation over a list of trees.
+combineBounded :: (DD m dd,TreeDDsMonad m)
+    => Integer -> m dd -> (Integer -> dd -> dd -> m (Maybe dd)) -> [TreeDDs dd] -> m (Maybe (dd,Integer))
+combineBounded remaining0 idElem bounded kids = do
+    z <- idElem
+    nz <- DD.nodecount z
+    go (Just (z,nz,remaining0)) kids
+    where
+    go Nothing _ = return Nothing
+    go (Just (acc,_,remaining)) [] = return (Just (acc,remaining))
+    go (Just (acc,nacc,remaining)) (k:ks)
+        | remaining <= 0 = return Nothing
+        | otherwise = do
+            -- the child spends from the SAME allowance, and hands back what it did not use
+            mk <- monoBoundedFrom remaining k
+            case mk of
+                Nothing -> return Nothing
+                Just (kd,remaining') | remaining' <= 0 -> return Nothing
+                                     | otherwise -> do
+                    nkd <- DD.nodecount kd
+                    mb <- bounded remaining' acc kd
+                    case mb of
+                        Nothing -> return Nothing
+                        Just acc' -> do
+                            nacc' <- DD.nodecount acc'
+                            let spent = Prelude.max 0 (nacc' - Prelude.max nacc nkd)
+                            go (Just (acc',nacc',remaining' - spent)) ks
+
+-- | Cluster a partitioned And-tree: greedily merge children whose supports overlap, each merge accepted only when the bounded apply stays under `budget`.
+clusterTreeDDs :: (DD m dd,TreeDDsMonad m) => Integer -> TreeDDs dd -> m (TreeDDs dd)
+clusterTreeDDs budget t =
+    case t of
+        NodeAndDDs m -> do
+            let kids = multiMapElems m
+            merged <- go [] kids
+            case merged of
+                [ one ] -> return one
+                many -> return (nodeAndDDs many)
+        _ -> return t
+    where
+    supOf = supportTreeDDs
+
+    overlaps a b = IntMap.foldrWithKey (\k _ acc -> acc || IntMap.member k b) False a
+
+    go acc [] = return (reverse acc)
+    go acc (k : ks) = do
+        acc' <- tryMerge [] acc k
+        go acc' ks
+
+    tryMerge tried [] k = return (reverse tried ++ [ k ])
+    tryMerge tried (c : cs) k =
+        if overlaps (supOf c) (supOf k) then do
+            mflat <- monoBounded budget (nodeAndDDs [ c, k ])
+
+            case mflat of
+                Just dd -> do
+                    sup <- DD.sizes dd
+                    return (reverse tried ++ (LeafDDs sup dd : cs))
+                Nothing -> tryMerge (c : tried) cs k
+        else
+            tryMerge (c : tried) cs k
+
+-- | Collapse to a single monolithic leaf if it fits the budget, else Nothing (keep partitioned).
+monoTreeDDsBounded :: (DD m dd,TreeDDsMonad m) => Integer -> TreeDDs dd -> m (Maybe (TreeDDs dd))
+monoTreeDDsBounded budget0 t = do
+    let budget = if budget0 <= 0 then (2 Prelude.^ (40 :: Int)) else budget0
+    mb <- monoBounded budget t
+    case mb of
+        Nothing -> return Nothing
+        Just dd -> do { sup <- DD.sizes dd; return (Just (LeafDDs sup dd)) }
+
+-- | Build an And-node from a list of trees, collapsing a singleton.
 nodeAndDDs :: [TreeDDs dd] -> (TreeDDs dd)
 nodeAndDDs xs = nodeAndDDs' $ multiMapFromList $ map (\x -> (supportTreeDDs x,x)) xs
 
+-- | Build an And-node from a support-keyed multimap, collapsing a singleton.
 nodeAndDDs' :: MultiMap (IntMap Int) (TreeDDs dd) -> TreeDDs dd
 nodeAndDDs' m = case isSingletonMultiMap m of
     Just (_,y) -> y
     Nothing -> NodeAndDDs m
 
+-- | Build an Or-node from a list of trees, collapsing a singleton.
 nodeOrDDs :: [TreeDDs dd] -> (TreeDDs dd)
 nodeOrDDs xs = nodeOrDDs' $ multiMapFromList $ map (\x -> (supportTreeDDs x,x)) xs
 
+-- | Build an Or-node from a support-keyed multimap, collapsing a singleton.
 nodeOrDDs' :: MultiMap (IntMap Int) (TreeDDs dd) -> TreeDDs dd
 nodeOrDDs' m = case isSingletonMultiMap m of
     Just (_,y) -> y
     Nothing -> NodeOrDDs m
 
--- joins TreeDDs with the same support set
+-- | Joins TreeDDs with the same support set
 joinMultiTreeDDs :: (DD m dd,TreeDDsMonad m) => ([TreeDDs dd] -> m (TreeDDs dd)) -> IntMap Int -> [TreeDDs dd] -> m [TreeDDs dd]
 joinMultiTreeDDs join sup xs = do
-    maxSize <- maxTreeDDsSize
-    if sizeTrees sup > maxSize
+    acc <- treeSupportAccept
+    if sizeTrees sup > acc
         then return xs
         else liftM (:[]) $ join xs
 
+-- | Conjoin two trees, merging supports under the budget.
 andTreeDDs :: forall m dd . (DD m dd,TreeDDsMonad m) => TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
 andTreeDDs x y = do
-    maxSize <- maxTreeDDsSize
     let supx = supportTreeDDs x
     let supy = supportTreeDDs y
-    let supxy = IntMap.union supx supy
-    let sizexy = sizeTrees supxy
-    if Prelude.not (IntMap.disjoint supx supy) && sizexy <= maxSize
-        then andDefault x y
-        else andTreeDDs' x y
+    if IntMap.disjoint supx supy
+        then andTreeDDs' x y -- disjoint supports never merge: the free decomposition win
+        else do
+            let sup = IntMap.union supx supy
+            acc <- treeSupportAccept
+            if sizeTrees sup <= acc
+                then andDefault x y
+                else andTreeDDs' x y
 
+-- | Conjoin two trees without a merge-budget check.
 andTreeDDs' :: forall m dd . (DD m dd,TreeDDsMonad m) => TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
 andTreeDDs' xs@(isLeaf (Proxy @m) -> Just True) ys = return ys
 andTreeDDs' xs@(isLeaf (Proxy @m) -> Just False) ys = return xs
@@ -317,24 +405,26 @@ andTreeDDs' xs ys@(isLeaf (Proxy @m) -> Just False) = return ys
 andTreeDDs' (NodeAndDDs xs) (NodeAndDDs ys) = liftM NodeAndDDs $ multiMapUnionWithKeyM (joinMultiTreeDDs andsDefault) xs ys
 andTreeDDs' (NodeAndDDs xs) y = liftM NodeAndDDs $ multiMapInsertWithKeyM (joinMultiTreeDDs andsDefault) (supportTreeDDs y) (y) xs
 andTreeDDs' x (NodeAndDDs ys) = liftM NodeAndDDs $ multiMapInsertWithKeyM (joinMultiTreeDDs andsDefault) (supportTreeDDs x) (x) ys
---andTreeDDs' x@(NodeOrDDs xs) y | supportTreeDDs y `IntMap.isSubmapOf` supportTreeDDs x = liftM nodeOrDDs' $ mapM (\x -> andTreeDDs x y) xs
---andTreeDDs' x y@(NodeOrDDs ys) | supportTreeDDs x `IntMap.isSubmapOf` supportTreeDDs y = liftM nodeOrDDs' $ mapM (\y -> andTreeDDs x y) ys
 andTreeDDs' x y = do
     x' <- normalizeTreeDDs x
     y' <- normalizeTreeDDs y
     return $ nodeAndDDs [x',y']
 
+-- | Disjoin two trees, merging supports under the budget.
 orTreeDDs :: forall m dd . (DD m dd,TreeDDsMonad m) => TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
 orTreeDDs x y = do
     let supx = supportTreeDDs x
     let supy = supportTreeDDs y
-    let supxy = IntMap.union supx supy
-    let sizexy = sizeTrees supxy
-    maxSize <- maxTreeDDsSize
-    if Prelude.not (IntMap.disjoint supx supy) && sizexy <= maxSize
-        then orDefault x y
-        else orTreeDDs' x y
+    if IntMap.disjoint supx supy
+        then orTreeDDs' x y
+        else do
+            let sup = IntMap.union supx supy
+            acc <- treeSupportAccept
+            if sizeTrees sup <= acc
+                then orDefault x y
+                else orTreeDDs' x y
 
+-- | Disjoin two trees without a merge-budget check.
 orTreeDDs' :: forall m dd . (DD m dd,TreeDDsMonad m) => TreeDDs dd -> TreeDDs dd -> m (TreeDDs dd)
 orTreeDDs' xs@(isLeaf (Proxy @m) -> Just True) ys = return xs
 orTreeDDs' xs@(isLeaf (Proxy @m) -> Just False) ys = return ys
@@ -343,8 +433,6 @@ orTreeDDs' xs ys@(isLeaf (Proxy @m) -> Just False) = return xs
 orTreeDDs' (NodeOrDDs xs) (NodeOrDDs ys) = liftM NodeOrDDs $ multiMapUnionWithKeyM (joinMultiTreeDDs orsDefault) xs ys
 orTreeDDs' (NodeOrDDs xs) y = liftM NodeOrDDs $ multiMapInsertWithKeyM (joinMultiTreeDDs orsDefault) (supportTreeDDs y) (y) xs
 orTreeDDs' x (NodeOrDDs ys) = liftM NodeOrDDs $ multiMapInsertWithKeyM (joinMultiTreeDDs orsDefault) (supportTreeDDs x) (x) ys
---orTreeDDs' x@(NodeAndDDs xs) y | supportTreeDDs y `IntMap.isSubmapOf` supportTreeDDs x = liftM nodeAndDDs' $ mapM (\x -> orTreeDDs x y) xs
---orTreeDDs' x y@(NodeAndDDs ys) | supportTreeDDs x `IntMap.isSubmapOf` supportTreeDDs y = liftM nodeAndDDs' $ mapM (\y -> orTreeDDs x y) ys
 orTreeDDs' x y = do
     x' <- normalizeTreeDDs x
     y' <- normalizeTreeDDs y
@@ -402,12 +490,15 @@ instance (DD m dd,TreeDDsMonad m) => DDstructure m dd (TreeDDs dd) where
         foldMultiMapCPSM (\_ dds y -> ors y =<< foldCPS ands ors leaf return dds) ff cont xs
     foldCPS ands ors leaf cont (LeafDDs sup dd) = cont =<< leaf dd
 
+-- | A 'TreeDDs' proxy for a given diagram-type proxy.
 proxyTreeDDs :: Proxy dd -> Proxy (TreeDDs dd)
 proxyTreeDDs _ = Proxy
 
+-- | An 'AndDDs' proxy for a given diagram-type proxy.
 proxyAndDDs :: Proxy dd -> Proxy (AndDDs dd)
 proxyAndDDs _ = Proxy
 
+-- | A 'NextDDs' proxy for a given diagram-type proxy.
 proxyNextDDs :: Proxy dd -> Proxy (NextDDs dd)
 proxyNextDDs _ = Proxy
 

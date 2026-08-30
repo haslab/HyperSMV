@@ -1,32 +1,19 @@
+-- | A parser for the HOA (Hanoi Omega-Automata) text format.
 module HOA.Parser where
 
-import Data.List as List
-import Data.Set (Set(..))
-import qualified Data.Set as Set
-import Data.IntSet (IntSet(..))
 import qualified Data.IntSet as IntSet
-import Data.Map (Map(..))
-import qualified Data.Map as Map
-import Data.IntMap (IntMap(..))
 import qualified Data.IntMap as IntMap
-import Data.HashMap.Lazy (HashMap(..))
 import qualified Data.HashMap.Lazy as HashMap
 import qualified Text.Parsec as Parsec
 import Text.Parsec.String (Parser)
-import qualified Text.Parsec.Char as Parsec
 import qualified Text.Parsec.String as Parsec
-import qualified Text.Parsec.Token as Parsec
-import qualified Text.Parsec.Language as Parsec
 import qualified Text.Parsec.Expr as Parsec
 import Control.Monad
-import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as UV
 
-import Utils
-import Error
 import HOA.Syntax
 import Parser
 
+-- | Parses a boolean expression over atomic propositions.
 apexprParser :: Parser APexpr
 apexprParser =
     removeHspace (Parsec.buildExpressionParser apexprOps apexprTerm)
@@ -48,6 +35,7 @@ apexprParser =
     prefix  name fun       = Parsec.Prefix (Parsec.string name >> return fun)
     postfix name fun       = Parsec.Postfix (Parsec.string name >> return fun)
 
+-- | Parses a @{i j ...}@ acceptance-set list.
 hacceptancesParser :: Parser HOAacceptances
 hacceptancesParser = parser Parsec.<|> return IntSet.empty
     where
@@ -56,6 +44,7 @@ hacceptancesParser = parser Parsec.<|> return IntSet.empty
         hspaces
         many1Till (intParser <* hspaces) (Parsec.char '}')
 
+-- | Parses one @State:@ declaration with its transitions.
 stateParser :: Parser (Int,HOAstate)
 stateParser = do
     Parsec.string "State:"
@@ -68,11 +57,13 @@ stateParser = do
     trans <- transitionsParser
     return (stateId,HOAstate stateAccepts trans)
 
+-- | Parses all transitions of a state.
 transitionsParser :: Parser HOAtransitions
 transitionsParser = do
     let stop = Parsec.lookAhead (Parsec.string "State:" Parsec.<|> Parsec.string "--END--")
     liftM HashMap.fromList $ Parsec.manyTill transitionParser stop
 
+-- | Parses a single bracketed-guard transition line.
 transitionParser :: Parser (APexpr,HOAnext)
 transitionParser = do
     apexpr <- bracketsParser apexprParser
@@ -84,6 +75,7 @@ transitionParser = do
     Parsec.endOfLine
     return (apexpr,HOAnext nextId nextAccepts)
 
+-- | Parses the @--BODY--@/@--END--@ block into the state table.
 bodyParser :: Parser HOAstates
 bodyParser = (do
     Parsec.string "--BODY--"
@@ -92,6 +84,7 @@ bodyParser = (do
     xs <- many1Till stateParser end
     return $ IntMap.fromList xs) Parsec.<?> "states"   
 
+-- | Parses a complete HOA file.
 fileParser :: Parser HOA
 fileParser = do
     hoa <- sectionsParser
@@ -100,11 +93,13 @@ fileParser = do
     Parsec.eof
     return $ hoa { hoa_states = body }
 
+-- | Parses all header sections before the body.
 sectionsParser :: Parser HOA
 sectionsParser = do
     let body = Parsec.lookAhead (Parsec.string "--BODY--")
     liftM mconcat $ Parsec.manyTill sectionParser body
     
+-- | Parses one header section.
 sectionParser :: Parser HOA
 sectionParser = do
     let ignore = (Parsec.manyTill Parsec.anyChar Parsec.endOfLine) >> return mempty
@@ -118,6 +113,7 @@ sectionParser = do
     let propertiesSec = Parsec.string "properties:" >> ignore
     hoaSec <||> nameSec <||> statesSec <||> startSec <||> apSec <||> accnameSec <||> acceptanceSec <||> propertiesSec
 
+-- | Parses the @Acceptance:@ section body.
 acceptancesParser :: Int -> Parser (Maybe [HOAacceptance])
 acceptancesParser 0 = do
     Parsec.string "t"
@@ -125,12 +121,14 @@ acceptancesParser 0 = do
     return Nothing
 acceptancesParser i = liftM Just $ boundedParser i (acceptanceParser <* hspaces)
 
+-- | Parses one @Inf(i)@ acceptance condition.
 acceptanceParser :: Parser HOAacceptance
 acceptanceParser = do
     Parsec.string "Inf"
     i <- parensParser intParser
     return (Inf i)
 
+-- | Parses an HOA automaton from a file.
 parseHOA :: FilePath -> IO HOA
 parseHOA path = do
     res <- Parsec.parseFromFile fileParser path
@@ -138,6 +136,7 @@ parseHOA path = do
         Left err -> error $ show err 
         Right parsed -> return parsed
 
+-- | Parses an HOA boolean literal.
 boolParser :: Parser Bool
 boolParser = (
     (liftM (const False) $ Parsec.string "f")

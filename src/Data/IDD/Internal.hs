@@ -1,10 +1,10 @@
+-- | Hash-consed IDD node type, its 'Sig' functor, memoising folds, and graph conversion.
 module Data.IDD.Internal
   (
   -- * Low level node type
     Node (Leaf, Branch)
   , nodeId
-
---  , numNodes
+  , numNodes
 
   -- * Fold
   , fold
@@ -24,7 +24,6 @@ module Data.IDD.Internal
   , foldGraphNodes
   ) where
 
-import Control.Monad
 import Control.Monad.ST
 import Control.Monad.ST.Unsafe
 import Data.Functor.Identity
@@ -37,16 +36,12 @@ import qualified Data.IntMap.Lazy as IntMap
 import Data.STRef
 import GHC.Generics
 import GHC.Stack
-import Data.HashMap.Lazy (HashMap(..))
-import qualified Data.HashMap.Lazy as HashMap
-import Data.Proxy
-import System.IO.Unsafe
 import Data.Vector (Vector(..))
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as UV
-import Data.Vector.Instances
+import qualified Data.IntSet as IntSet
+import Data.Vector.Instances ()
 
-import Utils
 
 -- ------------------------------------------------------------------------
 
@@ -70,6 +65,7 @@ pattern Branch ind bs <- (unintern -> UBranch ind bs) where
 
 {-# COMPLETE Leaf, Branch #-}
 
+-- | Uninterned representation of a 'Node'.
 data UNode
   = ULeaf {-# UNPACK #-} !Bool
   | UBranch {-# UNPACK #-} !Int (Vector Node)
@@ -91,13 +87,24 @@ instance Hashable (Description (Node))
 instance Uninternable (Node) where
   unintern (Node _ uformula) = uformula
 
--- TODO: this is unsafe as it may mix nodes with different types
+-- | One global intern table per Node type. Sound because 'describe' is TOTAL (every field of 'UNode' reaches the 'Description') and exactly one wrapper chain interprets these nodes.
 nodeCache :: Cache (Node)
 nodeCache = mkCache
 {-# NOINLINE nodeCache #-}
 
+-- | The interned identifier of a node.
 nodeId :: Node -> Id
 nodeId (Node id_ _) = id_
+
+-- | Number of distinct nodes viewed as a rooted DAG (hash-consed, counted by Id).
+numNodes :: Node -> Int
+numNodes root = IntSet.size (go IntSet.empty root)
+  where
+    go seen (Node i u)
+      | i `IntSet.member` seen = seen
+      | otherwise = case u of
+          ULeaf _        -> IntSet.insert i seen
+          UBranch _ kids -> V.foldl' go (IntSet.insert i seen) kids
 
 -- ------------------------------------------------------------------------
 
@@ -143,6 +150,7 @@ fold' br lf dd = runST $ do
   op <- mkFold'Op br lf
   op dd
 
+-- | Build a strict memoising fold over a 'Node'.
 mkFold'Op :: (Int -> Vector a -> a) -> (Bool -> a) -> ST s (Node -> ST s a)
 mkFold'Op br lf = do
   h <- C.newSized defaultTableSize
@@ -159,11 +167,13 @@ mkFold'Op br lf = do
                   return ret
   return f
 
+-- | CPS version of a memoising fold over a 'Node'.
 foldCPS :: (Int -> Vector b -> b) -> (Bool -> b) -> (b -> r) -> Node -> r
 foldCPS br lf k bdd = runST $ do
     op <- mkFoldCPSOp (\i cs -> return $! br i cs) (\b -> return $! lf b) (\b -> return $! k b)
     op bdd
 
+-- | Build a CPS memoising fold over a 'Node'.
 mkFoldCPSOp :: (Int -> Vector b -> ST s b) -> (Bool -> ST s b) -> (b -> ST s r) -> ST s (Node -> ST s r)
 mkFoldCPSOp br lf k = do
     h <- C.newSized defaultTableSize
@@ -175,16 +185,20 @@ mkFoldCPSOp br lf k = do
               Nothing -> do
                   let sz = V.length cs
                   let go i acc = if i >= sz
-                          then k =<< br top acc
+                          then do r <- br top acc
+                                  H.insert h p r
+                                  k $! r
                           else f (V.unsafeIndex cs i) $ \c' -> go (i+1) (V.snoc acc c')
                   go 0 V.empty
     return $! flip f k
 
+-- | Fold a 'Node' top-down, combining leaf values.
 accum :: Monoid b => (a -> Int -> Vector a) -> (a -> Bool -> b) -> a -> Node -> b
 accum br lf a dd = runST $ do
     op <- mkAccum br lf a
     op dd
 
+-- | Build the ST operation underlying 'accum'.
 mkAccum :: Monoid b => (a -> Int -> Vector a) -> (a -> Bool -> b) -> a -> ST s (Node -> ST s b)
 mkAccum br lf a = do
     ref <- newSTRef mempty

@@ -1,3 +1,4 @@
+-- | Hash-consing internals (the interned 'Node' type) underlying "Transform.Bexpr".
 module Transform.Bexpr.Internal
       (
       -- * Low level node type
@@ -9,7 +10,6 @@ module Transform.Bexpr.Internal
 import Data.Interned
 import Data.Hashable
 import Data.HashSet (HashSet(..))
-import qualified Data.HashSet as HashSet
 import Data.IntSet (IntSet(..))
 import qualified Data.IntSet as IntSet
 import GHC.Generics
@@ -17,6 +17,7 @@ import GHC.Generics
 import Smv.Syntax
 import Smv.Typing
 
+-- | An interned expression node.
 data Node = Node {-# UNPACK #-} !Id (UNode)
   deriving (Show)
 
@@ -52,6 +53,7 @@ pattern Bopn o bs <- (unintern -> Uopn o bs) where
 
 {-# COMPLETE Bbool, Bints, Bvar, Bop1, Bop2, Bopn #-}
 
+-- | The uninterned shape of a 'Node'.
 data UNode
   = Ubool {-# UNPACK #-} !Bool
   | Uints {-# UNPACK #-} !IntSet
@@ -87,16 +89,19 @@ instance Uninternable Node where
   unintern (Node _ uformula) = uformula
 
 
+-- | The interning cache for 'Node'.
 nodeCache :: Cache Node
 nodeCache = mkCache
 {-# NOINLINE nodeCache #-}
 
 
 
+-- | The id of a 'Node'.
 nodeId :: Node -> Id
 nodeId (Node id_ _) = id_
 
 -- ------------------------------------------------------------------------
 
+-- | Default interning table size.
 defaultTableSize :: Int
 defaultTableSize = 256

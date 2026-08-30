@@ -5,9 +5,9 @@ synopsis:
 
 license:            BSD-3-Clause
 license-file:       LICENSE
-author:             Anonymous
-maintainer:         someone@icse.com
-copyright:          (c) 2025 Anonymous
+author:             Hugo Pacheco
+maintainer:         hpacheco@di.uminho.pt
+copyright:          (c) 2026 Hugo Pacheco
 
 category:           Language
 
@@ -19,63 +19,74 @@ library
         split, text, bytestring, parsec, prettyprinter,
         directory, filepath, temporary, shelly, process,
         crypton,
-        heaps, hashtables, array, keys, containers, unordered-containers, vector, vector-instances, massiv, bitvec
+        heaps, hashtables, array, keys, containers, unordered-containers, vector, vector-instances, bitvec, deepseq,
+        cmdargs, clock
     build-tool-depends:
         alex:alex,
         happy:happy
     exposed-modules:
+        Alloy.Gates
         Alloy.Pretty
         Alloy.Syntax
-        Data.DT
+        Alloy.Translate
+        Cli.AH
+        Cli.Alloy
+        Cli.Args
+        Cli.Common
+        Cli.HyperQube
+        Cli.QBF
+        Data.BDD
+        Data.BDD.Internal
         Data.DD
         Data.DDs
-        Data.IDD.Internal
         Data.IDD
-        Data.BDD.Internal
-        Data.BDD
+        Data.IDD.Internal
         Error
+        ExplicitState.APAbstract
+        ExplicitState.APInference
+        ExplicitState.AutoHyper
+        ExplicitState.Enumerate
         ExplicitState.Eval
-        ExplicitState.Parser
+        ExplicitState.FormulaOptimize
         ExplicitState.Pretty
         ExplicitState.Product
         ExplicitState.Syntax
-        ExplicitState.AutoHyper
+        ExplicitState.Translate
+        ExplicitState.Witness
+        HOA.LTL
         HOA.Parser
         HOA.Syntax
-        HOA.LTL
         Location
         Parser
         Pretty
-        QCIR.Parser
-        QCIR.Pretty
-        QCIR.Syntax
-        QCIR.Solver
+        QBF.BitBlast
+        QBF.Gates
+        QBF.Model
+        QBF.Pretty
+        QBF.Solver
+        QBF.Syntax
+        QBF.Unroll
+        QBF.Witness
+        Smv.Declarative
         Smv.Lexer
         Smv.Packed
         Smv.Parser
         Smv.Pretty
         Smv.Solver
         Smv.Syntax
-        Smv.Typing
         Smv.Trace
-        Transform.Bexpr.Internal
+        Smv.Typing
         Transform.Bexpr
-        Transform.Bpacked
-        Transform.Bproduct
-        Transform.CSE
-        Transform.DDpacked
-        Transform.DDs
-        Transform.DT.Expr
-        Transform.Exhaustive
+        Transform.Bexpr.CSE
+        Transform.Bexpr.Internal
+        Transform.Bexpr.Packed
+        Transform.Bexpr.Rename
+        Transform.DD.Build
+        Transform.DD.Packed
+        Transform.DD.Split
         Transform.Minimize
         Transform.Normalize
         Transform.Pexpr
-        Transform.Rename
-        Transform.Smv
-        Transform.SmvToAlloy
-        Transform.SmvToExplicitState
-        Transform.SmvToQBF
-        Transform.Split
         Transform.Substitute
         Utils
     default-language: Haskell2010
@@ -104,7 +115,10 @@ library
         FunctionalDependencies
         ConstraintKinds
         QuantifiedConstraints
-    ghc-options: -w
+        BangPatterns
+        StandaloneDeriving
+        TypeSynonymInstances
+    ghc-options: -O2 -w -Wincomplete-patterns -Woverlapping-patterns -Wmissing-fields
 
 executable hypersmv
     hs-source-dirs: .
@@ -114,7 +128,8 @@ executable hypersmv
         mtl, transformers, containers, keys,
         text, bytestring, prettyprinter, hashable,
         crypton,
-        directory, filepath, temporary, shelly, process,
+        directory, filepath, shelly,
+        vector,
         hypersmv
     default-language: Haskell2010
     default-extensions:
@@ -126,5 +141,5 @@ executable hypersmv
         ScopedTypeVariables
         RankNTypes
         FlexibleContexts
-    ghc-options: -w
+    ghc-options: -O2 -w -Wincomplete-patterns -Woverlapping-patterns -Wmissing-fields -threaded
 

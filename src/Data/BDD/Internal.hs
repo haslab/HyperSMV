@@ -1,14 +1,4 @@
 {-# OPTIONS_GHC -Wall #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE ViewPatterns #-}
 ----------------------------------------------------------------------
 -- |
 -- Module      :  Data.DecisionDiagram.BDD.Internal.Node
@@ -60,7 +50,6 @@ import qualified Data.IntMap.Lazy as IntMap
 import Data.STRef
 import GHC.Generics
 import GHC.Stack
-import System.IO.Unsafe
 import qualified Data.Vector as V
 
 -- ------------------------------------------------------------------------
@@ -88,6 +77,7 @@ pattern Leaf b <- (asBool -> Just b) where
   Leaf True = T
   Leaf False = F
 
+-- | Recognise the constant leaves as a 'Bool'.
 asBool :: Node -> Maybe Bool
 asBool T = Just True
 asBool F = Just False
@@ -100,6 +90,7 @@ pattern Branch ind lo hi <- (unintern -> UBranch ind lo hi) where
 {-# COMPLETE T, F, Branch #-}
 {-# COMPLETE Leaf, Branch #-}
 
+-- | Uninterned representation of a 'Node'.
 data UNode
   = UT
   | UF
@@ -124,10 +115,12 @@ instance Hashable (Description Node)
 instance Uninternable Node where
   unintern (Node _ uformula) = uformula
 
+-- | The node interning table.
 nodeCache :: Cache Node
 nodeCache = mkCache
 {-# NOINLINE nodeCache #-}
 
+-- | The interned identifier of a node.
 nodeId :: Node -> Id
 nodeId (Node id_ _) = id_
 
@@ -191,6 +184,7 @@ fold' br lf bdd = runST $ do
   op <- mkFold'Op br lf
   op bdd
 
+-- | Build a strict memoising fold over a 'Node'.
 mkFold'Op :: (Int -> a -> a -> a) -> (Bool -> a) -> ST s (Node -> ST s a)
 mkFold'Op br lf = do
   h <- C.newSized defaultTableSize
@@ -207,11 +201,13 @@ mkFold'Op br lf = do
             return ret
   return f
 
+-- | CPS version of a memoising fold over a 'Node'.
 foldCPS :: (Int -> b -> b -> b) -> (Bool -> b) -> (b -> r) -> Node -> r
 foldCPS br lf k bdd = runST $ do
     op <- mkFoldCPSOp (\i l r -> return $! br i l r) (\b -> return $! lf b) (\b -> return $! k b)
     op bdd
 
+-- | Build a CPS memoising fold over a 'Node'.
 mkFoldCPSOp :: (Int -> b -> b -> ST s b) -> (Bool -> ST s b) -> (b -> ST s r) -> ST s (Node -> ST s r)
 mkFoldCPSOp br lf k = do
     h <- C.newSized defaultTableSize
@@ -220,14 +216,19 @@ mkFoldCPSOp br lf k = do
             m <- H.lookup h p
             case m of
               Just r -> k $! r
-              Nothing -> f lo $ \lo' -> f hi $ \hi' -> k =<< br top lo' hi'
+              Nothing -> f lo $ \lo' -> f hi $ \hi' -> do
+                  r <- br top lo' hi'
+                  H.insert h p r
+                  k $! r
     return $! flip f k
 
+-- | Fold a 'Node' top-down, combining leaf values.
 accum :: Monoid b => (a -> Int -> V.Vector a) -> (a -> Bool -> b) -> a -> Node -> b
 accum br lf a dd = runST $ do
     op <- mkAccum br lf a
     op dd
 
+-- | Build the ST operation underlying 'accum'.
 mkAccum :: Monoid b => (a -> Int -> V.Vector a) -> (a -> Bool -> b) -> a -> ST s (Node -> ST s b)
 mkAccum br lf a = do
     ref <- newSTRef mempty
@@ -238,11 +239,13 @@ mkAccum br lf a = do
                 mapM_ (\(a,c) -> f a c) $ V.zip (br a top) cs
     return (\p -> f a p >> readSTRef ref)
     
+-- | Monadic version of 'accum'.
 accumM ::(Monad m,Monoid b) => (a -> Int -> V.Vector a) -> (a -> Bool -> m b) -> a -> Node -> m b
 accumM br lf a dd = runST $ do
     op <- mkAccumM br lf a
     op dd
 
+-- | Build the ST operation underlying 'accumM'.
 mkAccumM :: (Monad m,Monoid b) => (a -> Int -> V.Vector a) -> (a -> Bool -> m b) -> a -> ST s (Node -> ST s (m b))
 mkAccumM br lf a = do
     ref <- newSTRef (return mempty)

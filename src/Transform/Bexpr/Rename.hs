@@ -1,15 +1,13 @@
-module Transform.Rename where
+-- | Renaming and substitution-grouping utilities.
+module Transform.Bexpr.Rename where
 
 import Control.Monad
 import Data.Set (Set(..))
 import qualified Data.Set as Set
-import Data.HashSet (HashSet(..))
-import qualified Data.HashSet as HashSet
 import Data.Map (Map(..))
 import qualified Data.Map as Map
 import Data.HashMap.Lazy (HashMap(..))
 import qualified Data.HashMap.Lazy as HashMap
-import Safe
 import Control.Monad.State(StateT(..))
 import qualified Control.Monad.State as State
 import Control.Monad.Identity
@@ -22,36 +20,45 @@ import Smv.Typing
 import Transform.Substitute
 import Transform.Pexpr
 import Transform.Bexpr
-import Transform.Bpacked
+import Transform.Bexpr.Packed
 import Pretty
 
+-- | A variable renaming\/retyping map.
 type NameSubst = Map Pident (Pident,ExprType)
 
+-- | Identity 'NameSubst' over a variable set.
 idNameSubst :: PackedPvars -> NameSubst
 idNameSubst vs = Map.mapWithKey (\k t -> (k,toExprType t)) vs
 
+-- | Converts a 'NameSubst' to a plain 'Subst'.
 fromNameSubst :: NameSubst -> Subst
 fromNameSubst = Map.map (\(n,t) -> Peident n t)
 
+-- | Merges per-trace 'NameSubst's.
 joinHyperNameSubst :: [(String,NameSubst)] -> NameSubst
 joinHyperNameSubst = Map.unions . map (uncurry toHyperNameSubst)
 
+-- | Prefixes a 'NameSubst' for one trace.
 toHyperNameSubst :: String -> NameSubst -> NameSubst
 toHyperNameSubst h xs = Map.foldrWithKey (\n1 (n2,t) -> Map.insert (toHyperPident h n1) (toHyperPident h n2,t)) Map.empty xs
 
+-- | Renames variables in 'PackedPvars'.
 renamePackedPvars :: NameSubst -> PackedPvars -> PackedPvars
 renamePackedPvars ns m = mapWithKey (renamePident ns) id m
 
+-- | Renames one identifier.
 renamePident :: NameSubst -> Pident -> Pident
 renamePident ss n = case Map.lookup n ss of
     Just (n',t') -> n'
     Nothing -> n
 
+-- | Renames variables in a 'Pformula'.
 renameFormula :: NameSubst -> Pformula -> Pformula
 renameFormula names (Pfforall n f) = Pfforall n $ renameFormula names f
 renameFormula names (Pfexists n f) = Pfexists n $ renameFormula names f
 renameFormula names (Pfltl e) = Pfltl $ renameExpr names e
 
+-- | Renames variables in a 'Pexpr'.
 renameExpr :: NameSubst -> Pexpr -> Pexpr
 renameExpr names e = case e of
     (Peident n t) -> case Map.lookup n names of
@@ -96,11 +103,13 @@ sortFormula = go 'A' Map.empty
             Nothing -> error $ "sortformula: " ++ show d
         sortDim d = error $ "sortformula: " ++ show d
 
+-- | Renames variables in a 'Bformula'.
 renameBformula :: Monad m => NameSubst -> Bformula -> StateT BSubstState m Bformula
 renameBformula names (Bforall n f) = liftM (Bforall n) $ renameBformula names f
 renameBformula names (Bexists n f) = liftM (Bexists n) $ renameBformula names f
 renameBformula names (Bltl e) = liftM Bltl $ renameBexpr names e
 
+-- | Renames variables in a 'Bexpr'.
 renameBexpr :: Monad m => NameSubst -> Bexpr -> StateT BSubstState m Bexpr
 renameBexpr names e = do
     h <- State.get
@@ -122,11 +131,13 @@ renameBexpr names e = do
         es' <- mapHashSetM (renameBexpr names) es
         return $ Bopn o es'
         
+-- | Retypes variables in a 'Bformula'.
 retypeBformula :: Monad m => Map Pident VarType -> Bformula -> StateT BSubstState m Bformula
 retypeBformula tys (Bforall n f) = liftM (Bforall n) $ retypeBformula tys f
 retypeBformula tys (Bexists n f) = liftM (Bexists n) $ retypeBformula tys f
 retypeBformula tys (Bltl e) = liftM Bltl $ retypeBexpr tys e
 
+-- | Retypes variables in a 'Bexpr'.
 retypeBexpr :: Monad m => Map Pident VarType -> Bexpr -> StateT BSubstState m Bexpr
 retypeBexpr tys e = do
     h <- State.get
@@ -150,14 +161,18 @@ retypeBexpr tys e = do
         es' <- mapHashSetM (retypeBexpr tys) es
         return $ Bopn o es'
 
+-- | Memoisation cache for rename\/retype.
 type BSubstState = HashMap Bexpr Bexpr
 
+-- | The empty 'BSubstState'.
 newBSubstState :: BSubstState
 newBSubstState = HashMap.empty
 
+-- | Runs a computation with a fresh 'BSubstState'.
 doBSubst :: Monad m => StateT BSubstState m a -> m a
 doBSubst m = State.evalStateT m newBSubstState
 
+-- | Renames variables throughout a 'PackedBmodule'.
 transformBrename :: Monad m => NameSubst -> PackedBmodule -> m (PackedBmodule,NameSubst)
 transformBrename names bimodule = do
     let name = b_name bimodule
@@ -171,6 +186,7 @@ transformBrename names bimodule = do
         ltl' <- mapM (renameBexpr names) $ b_ltlspec bimodule
         return (PackedBmodule name vars' defs' init' invar' trans' ltl',names)
 
+-- | Groups identifiers by dimension.
 groupVarSet :: [String] -> Set Pident -> [(String,Set Pident)]
 groupVarSet dims ss = runIdentity $ do
     let acc :: Map String (Set Pident) = Map.fromList $ map (,Set.empty) dims
@@ -184,6 +200,7 @@ groupVarSet dims ss = runIdentity $ do
     addToState :: Monad m => String -> Pident -> StateT (Map String (Set Pident)) m ()
     addToState dim n = State.modify $ Map.insertWith Set.union dim (Set.singleton n)
 
+-- | Groups a substitution by dimension.
 groupBSubst :: Monad m => [String] -> BSubst -> m [BSubst]
 groupBSubst dims ss = do
     let acc = Map.fromList $ map (,Map.empty) dims
@@ -197,6 +214,7 @@ groupBSubst dims ss = do
     addToState :: Monad m => String -> Pident -> Bexpr -> StateT (Map String BSubst) m ()
     addToState dim n e = State.modify $ Map.insertWith Map.union dim (Map.singleton n e)
 
+-- | Merges per-dimension substitutions back together.
 ungroupBSubst :: Monad m => [String] -> [BSubst] -> m BSubst
 ungroupBSubst dims qss = doBSubst $ do
     let mkdim dim n = addDimPident n (mkQuantDim dim)

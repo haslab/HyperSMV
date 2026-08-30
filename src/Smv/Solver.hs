@@ -1,16 +1,15 @@
+-- | Driving nuXmv as an external solver.
 module Smv.Solver where
 
 import qualified Shelly
 import Data.Text (Text(..))
 import qualified Data.Text as T
-import qualified Data.Text.IO as T
 import Data.Map (Map(..))
-import qualified Data.Map as Map
 import qualified Data.Map.Merge.Lazy as Map
 import Control.Monad
 import Data.ByteString.Lazy (ByteString(..))
 import qualified Data.ByteString.Lazy as BS
-import Control.Monad.State (State(..),StateT(..))
+import Control.Monad.State (StateT(..))
 import qualified Control.Monad.State as State
 import Data.List as List
 import Crypto.Hash (Digest, SHA256)
@@ -20,22 +19,22 @@ import Control.Monad.IO.Class
 import Utils
 import Error
 import qualified Location as L
-import Transform.Bpacked
 import Transform.Substitute
 import Smv.Trace as Smv
 import Smv.Syntax
 import Smv.Parser
 import Smv.Typing
 import Smv.Packed
-import Smv.Pretty hiding (SmvMode(..))
 import qualified Smv.Pretty as Smv
 
+-- | Run nuXmv to simplify a model file.
 doOptimizeNuXMV :: Bool -> FilePath -> FilePath -> IO FilePath
 doOptimizeNuXMV isDebug infile outfile = Shelly.shelly $ shellyMode isDebug $ do
     Shelly.setStdin $ nuXmvOptimizeScript infile outfile
     Shelly.run_ "nuXmv" ["-int"] 
     return outfile
     
+-- | The nuXmv script for 'doOptimizeNuXMV'.
 nuXmvOptimizeScript :: FilePath -> FilePath -> Text
 nuXmvOptimizeScript infile outfile = T.unlines
     ["read_model -i " <> T.pack infile <> ";"
@@ -45,12 +44,14 @@ nuXmvOptimizeScript infile outfile = T.unlines
     ,"write_simplified_model_rel -o " <> T.pack outfile <> ";"
     ,"quit;"]
 
+-- | Check a model has no deadlocks via nuXmv.
 doCheckFsmNuXMV :: Bool -> FilePath -> IO Bool
 doCheckFsmNuXMV isDebug infile = Shelly.shelly $ shellyMode isDebug $ do
     Shelly.setStdin $ nuXmvCheckFSMScript infile
     out <- Shelly.run "nuXmv" ["-int"] 
     return $ (not $ T.isInfixOf "finite state machine is empty" out) && T.isInfixOf "No deadlock state exists" out
     
+-- | The nuXmv script for 'doCheckFsmNuXMV'.
 nuXmvCheckFSMScript :: FilePath -> Text
 nuXmvCheckFSMScript infile = T.unlines
     ["read_model -i " <> T.pack infile <> ";"
@@ -60,6 +61,7 @@ nuXmvCheckFSMScript infile = T.unlines
     ,"check_fsm;"
     ,"quit;"]
     
+-- | Check a model's transition relation is total via nuXmv.
 doCheckSpecTotalNuXMV :: Bool -> FilePath -> IO Bool
 doCheckSpecTotalNuXMV isDebug infile = Shelly.shelly $ shellyMode isDebug $ do
     Shelly.setStdin $ nuXmvCheckSpecTotalScript infile
@@ -72,6 +74,7 @@ doCheckSpecTotalNuXMV isDebug infile = Shelly.shelly $ shellyMode isDebug $ do
             else if T.isInfixOf "is false" l then return False
             else error $ "doCheckSpecTotalNuXMV unexpected boolean output" 
     
+-- | The nuXmv script for 'doCheckSpecTotalNuXMV'.
 nuXmvCheckSpecTotalScript :: FilePath -> Text
 nuXmvCheckSpecTotalScript infile = T.unlines
     ["read_model -i " <> T.pack infile <> ";"
@@ -98,6 +101,7 @@ doBooleanNuXMV isDebug infile outfile = do
     appendFile outfile $ "\n" ++ (Smv.prettySMV Smv.Default $ Pidefine $ map L.dummyLoc $ unpackPdefines indefs)
     return (outfile,boolNames)
     
+-- | The nuXmv script for 'doBooleanNuXMV'.
 nuXmvBooleanScript :: FilePath -> FilePath -> Text
 nuXmvBooleanScript infile outfile = T.unlines
     ["read_model -i " <> T.pack infile <> ";"
@@ -107,13 +111,15 @@ nuXmvBooleanScript infile outfile = T.unlines
     ,"write_boolean_model -o " <> T.pack outfile <> ";"
     ,"quit;"]
 
-doFindTraceK :: Bool -> FilePath -> Int -> IO (Maybe Trace)
-doFindTraceK isDebug infile k = do
+-- | Bounded-model-check for a counterexample trace via nuXmv.
+doFindTraceK :: Bool -> Map String Pident -> FilePath -> Int -> IO (Maybe Trace)
+doFindTraceK isDebug names infile k = do
     out <- Shelly.shelly $ shellyMode isDebug $ do
         Shelly.setStdin $ nuXmvFindKScript infile k
         Shelly.run "nuXmv" ["-int"]
-    return (error "doFindTraceK") -- TODO
+    return $ if T.isInfixOf "is false" out then parseNuXmvTrace names out else Nothing
 
+-- | The nuXmv script for 'doFindTraceK'.
 nuXmvFindKScript :: FilePath -> Int -> Text
 nuXmvFindKScript infile k = T.unlines
     ["read_model -i " <> T.pack infile <> ";"
@@ -121,24 +127,28 @@ nuXmvFindKScript infile k = T.unlines
     ,"check_ltlspec_bmc -k " <> T.pack (show k) <> ";"
     ,"quit;"]
 
-doFindTrace :: Bool -> FilePath -> IO (Maybe Trace)
-doFindTrace isDebug infile = do
+-- | Check the model's (single) LTLSPEC; on "is false", parse the counterexample trace.
+doFindTrace :: Bool -> Map String Pident -> FilePath -> IO (Maybe Trace)
+doFindTrace isDebug names infile = do
     out <- Shelly.shelly $ shellyMode isDebug $ do
         Shelly.setStdin $ nuXmvFindScript infile
         Shelly.run "nuXmv" ["-int"]
-    return (error "doFindTrace") -- TODO
+    return $ if T.isInfixOf "is false" out then parseNuXmvTrace names out else Nothing
 
 nuXmvFindScript :: FilePath -> Text
 nuXmvFindScript infile = T.unlines
     ["read_model -i " <> T.pack infile <> ";"
-    ,"check_ltlspec -n 1;"
+    ,"go;"
+    ,"check_ltlspec;"
     ,"quit;"]
 
+-- | Parse an SMV file into a packed module.
 readSMV :: FilePath -> IO PackedPmodule
 readSMV f = do
     txt <- BS.readFile f
     parseSMV f txt
 
+-- | Parse SMV files, caching by content hash.
 readSMVs :: [FilePath] -> IO [(Digest SHA256,PackedPmodule)]
 readSMVs fs = liftM (map (id >< snd)) $ State.execStateT (mapM go fs) []
     where
@@ -156,6 +166,7 @@ readSMVs fs = liftM (map (id >< snd)) $ State.execStateT (mapM go fs) []
                     Nothing -> liftM (h,) $ liftIO $ parseSMV path txt
         State.modify $ \m -> m ++ [(h,(path,smv))]
 
+-- | Parse and type SMV source into a packed module.
 parseSMV :: FilePath -> ByteString -> IO PackedPmodule
 parseSMV f txt = do
     m <- ioErrorM $ runSMVParser f txt >>= packPmodule . L.unloc

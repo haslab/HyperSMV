@@ -1,3 +1,4 @@
+-- | Small Prettyprinter helpers.
 module Pretty where
 
 import Prettyprinter
@@ -7,9 +8,11 @@ sepBy o [] = emptyDoc
 sepBy o [x] = x
 sepBy o (x:xs) = x <+> o <+> sepBy o xs
 
+-- | Renders a pretty-printable value as a 'String'.
 prettyprint :: Pretty a => a -> String
 prettyprint a = show $ pretty a
 
+-- | Vertically concatenates docs, indented by n spaces.
 nestvcat :: Int -> [Doc ann] -> Doc ann
 nestvcat i [] = emptyDoc
 nestvcat i (x:xs) = nest i (vcat $ pretty (replicate i ' ') <> x : xs)

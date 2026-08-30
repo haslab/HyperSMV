@@ -1,27 +1,27 @@
+-- | The pretty-printer for SMV modules and HyperLTL expressions.
 module Smv.Pretty where
     
 import Prettyprinter
 import Prelude hiding ((<>))
-import Data.Set (Set(..))
-import qualified Data.Set as Set
-import qualified Data.HashSet as HashSet
-import Data.IntSet (IntSet(..))
 import qualified Data.IntSet as IntSet
 
 import Pretty
 import qualified Location as L
 import Smv.Syntax
-import Utils
 
+-- | The pretty-printing output target.
 data SmvMode = Default | HyperQube SmvKind | AutoHyper SmvKind | GenQBF SmvKind deriving (Eq,Show)
+-- | Whether a target prints plain SMV or hyper syntax.
 data SmvKind = Smv | Hyper deriving (Eq,Show)
 
+-- | The 'SmvKind' underlying a mode.
 smvKind :: SmvMode -> SmvKind
 smvKind Default = Smv
 smvKind (HyperQube k) = k
 smvKind (AutoHyper k) = k
 smvKind (GenQBF k) = k
 
+-- | Types with a mode-dependent pretty-printer.
 class SmvPretty a where
     pp :: SmvMode -> a -> Doc ann
 
@@ -44,6 +44,7 @@ instance SmvPretty Pitem where
     pp m (Piinvar i) = vcat [pretty "INVAR",pp m i]
     pp m (Pitrans i) = vcat [pretty "TRANS",pp m i]
     pp m (Piltlspec i) = vcat [pretty "LTLSPEC",pp m i,pretty ";"]
+    pp m (Pijustice i) = vcat [pretty "JUSTICE",pp m i,pretty ";"]
     pp m (Piassign a) = nest 4 $ vcat (pretty "ASSIGN":map (pp m) a)
     
 instance SmvPretty Ptype where
@@ -55,6 +56,7 @@ instance SmvPretty Ptype where
 instance SmvPretty Pvar where
     pp m (Pvar n t) = pclose False (ppIdent m n) <+> pretty ':' <+> pp m t <> pretty ';'
     
+-- | Pretty-print array dimension subscripts.
 ppDims :: SmvMode -> Pdims -> Doc ann
 ppDims m@(GenQBF Hyper) dims = hcat (map (\dim -> pretty "_" <> (ppClosedExpr m False dim)) dims)
 ppDims m dims = hcat (map (\dim -> brackets (ppClosedExpr m False dim)) dims)
@@ -131,12 +133,15 @@ instance Pretty Pexpr where
 instance Pretty Pformula where
     pretty e = pp Default e
 
+-- | A printed doc, tagged with whether it needs parens.
 data PDoc ann = PClosed Bool (Doc ann) | PDoc (Doc ann)
 
+-- | Discard a 'PDoc''s paren-need tag.
 unPDoc :: PDoc ann -> Doc ann
 unPDoc (PClosed _ p) = p
 unPDoc (PDoc p) = p
 
+-- | Parenthesize a 'PDoc' if required.
 pclose :: Bool -> PDoc ann -> Doc ann
 pclose True (PClosed True p) = p
 pclose True (PClosed False p) = parens p
@@ -144,9 +149,11 @@ pclose True (PDoc p) = parens p
 pclose False (PClosed _ p) = p
 pclose False (PDoc p) = parens p
 
+-- | Pretty-print an expression, optionally parenthesized.
 ppClosedExpr :: SmvMode -> Bool -> Pexpr -> Doc ann
 ppClosedExpr m withParens e = pclose withParens $ ppExpr m e
 
+-- | Pretty-print an expression for a given mode.
 ppExpr :: SmvMode -> Pexpr -> PDoc ann
 ppExpr m (Peident n t) = ppIdent m n
 ppExpr (AutoHyper _) (Pebool True) = PClosed False $ pretty "true"
@@ -159,6 +166,7 @@ ppExpr m (Pebool True) = PClosed False $ pretty "TRUE"
 ppExpr m (Pebool False) = PClosed False $ pretty "FALSE"
 ppExpr m (Peint i) = PClosed False $ pretty i
 ppExpr m@(AutoHyper Hyper) (Peop1 Patom e) = PClosed False $ braces $ ppClosedExpr m False e
+ppExpr m (Peop1 Patom e) = ppExpr m e
 ppExpr m@(GenQBF _) (Peop1 Pnext e) = PDoc $ ppClosedExpr m False e <> pretty "'"
 ppExpr m (Peop1 Pnext e) = PDoc $ pp m Pnext <+> ppClosedExpr m True e
 ppExpr m@(HyperQube Hyper) (Peop1 o e) | isLTLOp1 o = PDoc $ pp m o <+> parens (unPDoc $ ppExpr m e)
@@ -168,15 +176,12 @@ ppExpr m@(HyperQube Hyper) e@(Peop2 o@(isCmpOp2 -> True) e1 e2) = ppCmp2HyperQub
 ppExpr m (Peop2 o e1 e2) = PDoc $ ppClosedExpr m False e1 <+> pp m o <+> ppClosedExpr m False e2
 ppExpr m (Peopn Pset es) = PClosed False $ braces $ sepBy (pp m Pset) (map (ppClosedExpr m False) es)
 ppExpr m (Peopn o es) = PDoc $ sepBy (pp m o) (map (ppClosedExpr m False) es)
---ppExpr m@(HyperQube Hyper) (Peproj n es t) = PClosed True $ parens $ pclose False (ppIdent m n) <> hcat (map ppProj es)
---    where ppProj e = pretty '[' <> ppClosedExpr m False e <> pretty ']'
---ppExpr m (Peproj n es t) = PClosed False $ pclose False (ppIdent m n) <> hcat (map ppProj es)
---    where ppProj e = pretty '[' <> ppClosedExpr m False e <> pretty ']'
 ppExpr m (Pecase cases) = PClosed False $ nest 4 $ vcat (pretty "case":map printCase cases ++ [pretty "esac"])
     where
     printCase (l,r) = ppClosedExpr m True l <+> pretty ":" <+> pp m r <> pretty ';'
 ppExpr m (Pedemorgan c e1 e2) = PDoc $ ppClosedExpr m False c <+> pretty '?' <+> ppClosedExpr m False e1 <+> pretty ':' <+> ppClosedExpr m False e2 
       
+-- | Pretty-print a comparison in HyperQube syntax.
 ppCmp2HyperQubeFormula :: Pop2 -> Pexpr -> Pexpr -> PDoc ann
 ppCmp2HyperQubeFormula Peq e1 e2 = PClosed False $ pretty "*" <> ppClosedExpr (HyperQube Hyper) False e1 <+> pp (HyperQube Hyper) Peq <+> ppClosedExpr (HyperQube Hyper) False e2 <> pretty "*"
 ppCmp2HyperQubeFormula Pneq e1 e2 = ppExpr (HyperQube Hyper) (Peop1 Pnot $ Peop2 Peq e1 e2)
@@ -185,12 +190,15 @@ ppCmp2HyperQubeFormula o e1 e2 = error $ "ppOp2HyperQube: " ++ prettyprint (Peop
 instance Pretty Pident where
     pretty = pclose False . ppIdent Default
       
+-- | Render an identifier to a string.
 prettyPident :: Pident -> String
 prettyPident = show . pclose False . ppIdent Default
       
+-- | Pretty-print an identifier for a given mode.
 ppIdent :: SmvMode -> Pident -> PDoc ann
 ppIdent m (Pident n dims) = ppIdent' m n dims
 
+-- | Pretty-print an identifier's name and dimensions.
 ppIdent' :: SmvMode -> String -> Pdims -> PDoc ann
 ppIdent' m n dims | smvKind m == Smv = PClosed False $ ppName m n <> hcat (map (\dim -> pretty "[" <> ppClosedExpr m False dim <> pretty "]") dims)
 ppIdent' m@Default n dims = PClosed False $ ppName m n <> ppDims m dims
@@ -200,6 +208,7 @@ ppIdent' m@(AutoHyper Hyper) n [] = PClosed True $ ppName m n
 ppIdent' m@(AutoHyper Hyper) n dims = PClosed False $ pretty '\"' <> pretty (Pident n $ init dims) <> pretty '\"' <> pretty '_' <> ppClosedExpr Default False (last dims)
 ppIdent' m n dims = error $ "ppIdent': " ++ show m ++ " " ++ show n ++ " " ++ show dims
 
+-- | Render a value to a string for a given mode.
 prettySMV :: SmvPretty a => SmvMode -> a -> String
 prettySMV m = show . pp m
  
@@ -209,10 +218,12 @@ hyperQubeChars '#' = False
 hyperQubeChars '_' = False
 hyperQubeChars c = True
 
+-- | Characters accepted by AutoHyper identifiers.
 autoHyperChars :: Char -> Bool
 autoHyperChars '#' = False
 autoHyperChars c = True
 
+-- | Pretty-print a name, filtering backend-forbidden characters.
 ppName :: SmvMode -> String -> Doc ann
 ppName Default n = pretty n
 ppName (HyperQube _) n = pretty $ filter hyperQubeChars n

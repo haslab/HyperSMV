@@ -1,8 +1,6 @@
+-- | Substitution of identifiers by expressions.
 module Transform.Substitute where
 
-import Data.Set (Set(..))
-import qualified Data.Set as Set
-import qualified Data.HashSet as HashSet
 import Data.Map (Map(..))
 import qualified Data.Map as Map
 import Data.IntMap (IntMap(..))
@@ -18,8 +16,10 @@ import Smv.Packed
 import Utils
 import Transform.Pexpr
 
+-- | A substitution: identifiers mapped to replacement expressions.
 type Subst = Map Pident Pexpr
 
+-- | Apply per-copy substitutions to a formula.
 substFormula :: Monad m => [Subst] -> Bool -> Pformula -> m Pformula
 substFormula sss recurse = substFormula' Map.empty sss
     where
@@ -60,15 +60,19 @@ substExpr mleft mright recurse (Pedemorgan c e1 e2) = do
     e2' <- substExpr mleft mright recurse e2
     return $ Pedemorgan c' e1' e2'
 
+-- | A module's DEFINE entries as a substitution.
 moduleSubst :: PackedPmodule -> Subst
 moduleSubst smv = p_defines smv
 
+-- | Namespace a substitution under a hyper copy.
 toHyperSubst :: String -> Subst -> Subst
 toHyperSubst h s = Map.foldrWithKey (\n e -> Map.insert (toHyperPident h n) (toHyperExpr h e)) Map.empty s
 
+-- | Namespace an identifier under a hyper copy.
 toHyperPident :: String -> Pident -> Pident
 toHyperPident h (Pident n dims) = Pident n (dims++[Peident (Pident h []) EUnknown])
 
+-- | Namespace an expression's identifiers under a hyper copy.
 toHyperExpr :: String -> Pexpr -> Pexpr
 toHyperExpr h (Peident n t) = Peident (toHyperPident h n) t
 toHyperExpr h (Pebool b) = Pebool b
@@ -76,16 +80,18 @@ toHyperExpr h (Peint i) = Peint i
 toHyperExpr h (Peop1 o e) = Peop1 o (toHyperExpr h e)
 toHyperExpr h (Peop2 o e1 e2) = Peop2 o (toHyperExpr h e1) (toHyperExpr h e2)
 toHyperExpr h (Peopn o es) = Peopn o (map (toHyperExpr h) es)
---toHyperExpr h (Peproj n es t) = Peproj (toHyperPident h n) (map (toHyperExpr h) es) t
 toHyperExpr h (Pecase cs) = Pecase $ map (toHyperExpr h >< toHyperExpr h) cs
 toHyperExpr h (Pedemorgan c e1 e2) = Pedemorgan (toHyperExpr h c) (toHyperExpr h e1) (toHyperExpr h e2)
 
+-- | Merge per-copy variable maps into one.
 joinHyperPvars :: [(String,PackedPvars)] -> PackedPvars
 joinHyperPvars = Map.unions . map (uncurry toHyperPackedPvars)
 
+-- | Namespace a variable map under a hyper copy.
 toHyperPackedPvars :: String -> PackedPvars -> PackedPvars
 toHyperPackedPvars h xs = Map.foldrWithKey (\n t -> Map.insert (toHyperPident h n) t) Map.empty xs
 
+-- | Split a substitution into per-dimension substitutions.
 groupSubst :: Monad m => [String] -> Subst -> m [Subst]
 groupSubst dims ss = do
     let acc = Map.fromList $ map (,Map.empty) dims
@@ -99,22 +105,28 @@ groupSubst dims ss = do
     addToState :: Monad m => String -> Pident -> Pexpr -> StateT (Map String Subst) m ()
     addToState dim n e = State.modify $ Map.insertWith Map.union dim (Map.singleton n e)
 
+-- | Compose substitution lists, treating Nothing as identity.
 maybeComposeSubsts :: Maybe [Subst] -> [Subst] -> [Subst]
 maybeComposeSubsts Nothing s2 = s2
 maybeComposeSubsts (Just s1) s2 = composeSubsts s1 s2
 
+-- | Compose two lists of substitutions pointwise.
 composeSubsts :: [Subst] -> [Subst] -> [Subst]
 composeSubsts s1 s2 = map (uncurry composeSubst) (zip s1 s2)
 
+-- | Compose substitutions, treating Nothing as identity.
 maybeComposeSubst :: Maybe Subst -> Subst -> Subst
 maybeComposeSubst Nothing s2 = s2
 maybeComposeSubst (Just s1) s2 = composeSubst s1 s2
 
+-- | Compose two substitutions.
 composeSubst :: Subst -> Subst -> Subst
 composeSubst s1 s2 = runIdentity $ mapM (substExpr s2 s2 False) s1
 
+-- | Compose substitution lists into per-index maps.
 composeIntSubsts :: [Subst] -> [IntMap Subst] -> [IntMap Subst]
 composeIntSubsts s1 s2 = map (uncurry composeIntSubst) (zip s1 s2)
 
+-- | Compose a substitution into an IntMap of substitutions.
 composeIntSubst :: Subst -> IntMap Subst -> IntMap Subst
 composeIntSubst s1 ss2 = IntMap.map (composeSubst s1) ss2

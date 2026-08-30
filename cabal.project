@@ -1,0 +1,5 @@
+packages:
+    .
+
+constraints:
+    shelly >= 1.10

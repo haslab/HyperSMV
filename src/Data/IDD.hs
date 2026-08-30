@@ -1,14 +1,24 @@
+-- | Multi-way decision diagrams: boolean ops, quantification, satisfiability, graph conversion.
 -- An implementation of Multi-way decision diagrams (MIDDs) with int or bool variables.
 -- Code adapted from the package decision-diagrams on hackage.
 
 module Data.IDD
   (
+    nodeId,
+    restrictWithIdx,
+
   -- * The IDD type
     IDD (Leaf, Branch)
 
   -- * Item ordering
   
   , apply
+  , andBounded
+  , existsSet
+  , renameSet
+  , forAllSet
+  , andExistsSet
+  , orBounded
 
   -- * Boolean operations
   , true
@@ -38,11 +48,16 @@ module Data.IDD
   , unfoldOrd
   
   , support
+  , numNodes
   , evaluate
   
   -- * Satisfiability
   , anySat
   , allSat
+  , findSatDFS
+  , findSatDFSWith
+  , allSatWith
+  , findSatM
   , anySatComplete
   , allSatComplete
 
@@ -57,15 +72,11 @@ module Data.IDD
 import Safe
 import Prelude hiding (and,or,not)
 import qualified Prelude
-import Control.Exception (assert)
 import Control.Monad hiding (foldM)
-import Control.Monad.Primitive
 import Control.Monad.ST
-import Control.Monad.ST.Unsafe
-import Data.Bits (Bits (shiftL))
+import Data.STRef
 import qualified Data.Foldable as Foldable
 import Data.Hashable
-import qualified Data.Foldable
 import qualified Data.HashMap.Lazy as HashMap
 import qualified Data.HashTable.Class as H
 import qualified Data.HashTable.ST.Cuckoo as C
@@ -76,17 +87,10 @@ import Data.IntSet (IntSet)
 import qualified Data.IntSet as IntSet
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
-import Data.Proxy
-import Data.Ratio
 import qualified Data.Vector as V
 import GHC.Stack
-import Numeric.Natural
-import System.Random.MWC (Uniform (..))
-import System.Random.Stateful (StatefulGen (..))
-import System.Random.MWC.Distributions (bernoulli)
 import Text.Read
 import Data.Vector (Vector(..))
-import qualified Data.Vector as V
 
 import Utils
 import Data.IDD.Internal (Sig (..), Graph)
@@ -118,15 +122,38 @@ pattern Branch x bs <- IDD (Node.Branch x (fmap IDD -> bs)) where
 
 {-# COMPLETE Leaf, Branch #-}
 
+-- | Cofactor under a partial assignment. Memoised on the node.
+restrictWithIdx :: (Int -> Maybe Int) -> IDD -> IDD
+restrictWithIdx f idd = runST $ do
+  h <- C.newSized defaultTableSize
+  let go n@(Leaf _) = return n
+      go n@(Branch x bs) = do
+        m <- H.lookup h n
+        case m of
+          Just y -> return y
+          Nothing -> do
+            ret <- case f x of
+              Just i -> go (bs V.! i)
+              Nothing -> do
+                bs' <- V.mapM go bs
+                return $ if bs' == bs then n else Branch x bs'
+            H.insert h n ret
+            return ret
+      go _ = error "restrictWithIdx: impossible"
+  go idd
+
+-- | Interned id of the underlying node.
 nodeId :: IDD -> Int
 nodeId (IDD node) = Node.nodeId node
 
+-- | Result of comparing two nodes' top variables.
 data IDDCase2
   = IDDCase2LT Int (Vector IDD)
   | IDDCase2GT Int (Vector IDD)
   | IDDCase2EQ Int (Vector IDD) (Vector IDD)
   | IDDCase2EQ2 Bool Bool
 
+-- | Compare two IDDs' top variables.
 ddCase2 ::  IDD -> IDD -> IDDCase2
 ddCase2 (Branch ptop ps) (Branch qtop qs) =
   case compare ptop qtop of
@@ -152,9 +179,11 @@ instance Read (IDD) where
 
 -- ------------------------------------------------------------------------
 
+-- | The constant false diagram.
 false :: IDD
 false = Leaf False
 
+-- | The constant true diagram.
 true :: IDD
 true = Leaf True
 
@@ -177,11 +206,13 @@ not bdd = runST $ do
 var :: Int -> (Int,IntSet) -> IDD
 var i (sz,vs) = Branch i $ V.generate sz $ \v -> if IntSet.member v vs then true else false
 
+-- | Apply a memoised binary operation to two IDDs.
 apply :: Bool -> (IDD -> IDD -> Maybe (IDD)) -> IDD -> IDD -> IDD
 apply isCommutative func bdd1 bdd2 = runST $ do
   op <- mkApplyOp isCommutative func
   op bdd1 bdd2
 
+-- | Build a memoising binary operation over IDDs.
 mkApplyOp :: forall s. Bool -> (IDD -> IDD -> Maybe (IDD)) -> ST s (IDD -> IDD -> ST s (IDD))
 mkApplyOp isCommutative func = do
   h <- C.newSized defaultTableSize
@@ -201,29 +232,68 @@ mkApplyOp isCommutative func = do
             return ret
   return f
 
+-- | Bounded apply: aborts to 'Nothing' once more than @budget@ freshly-created nodes have been built.
+mkApplyOpBounded :: forall s. Int -> Bool -> (IDD -> IDD -> Maybe IDD) -> ST s (IDD -> IDD -> ST s (Maybe IDD))
+mkApplyOpBounded budget isCommutative func = do
+  h <- C.newSized defaultTableSize
+  cnt <- newSTRef (0 :: Int)
+  let f a b | Just c <- func a b = return c
+      f n1 n2 = do
+        k <- readSTRef cnt
+        if k > budget then return (Leaf False)
+        else do
+          let key = if isCommutative && nodeId n2 < nodeId n1 then (n2, n1) else (n1, n2)
+          m <- H.lookup h key
+          case m of
+            Just y -> return y
+            Nothing -> do
+              writeSTRef cnt (k + 1)
+              ret <- case ddCase2 n1 n2 of
+                IDDCase2GT x2 bs2 -> Branch x2 <$> traverse (f n1) bs2
+                IDDCase2LT x1 bs1 -> Branch x1 <$> traverse (flip f n2) bs1
+                IDDCase2EQ x bs1 bs2 -> Branch x <$> V.zipWithM f bs1 bs2
+                IDDCase2EQ2 _ _ -> error "applyBounded: should not happen"
+              H.insert h key ret
+              return ret
+  return $ \a b -> do
+    writeSTRef cnt 0
+    r <- f a b
+    k <- readSTRef cnt
+    return $ if k > budget then Nothing else Just r
+
+-- | Conjunction, bailing out past a node budget.
+andBounded :: Int -> IDD -> IDD -> Maybe IDD
+andBounded budget d1 d2 = runST $ mkApplyOpBounded budget True joinAnd >>= \op -> op d1 d2
+
+-- | Disjunction, bailing out past a node budget.
+orBounded :: Int -> IDD -> IDD -> Maybe IDD
+orBounded budget d1 d2 = runST $ mkApplyOpBounded budget True joinOr >>= \op -> op d1 d2
+
 -- | Conjunction of two boolean function
 (.&&.) :: IDD -> IDD -> IDD
-(.&&.) = apply True join
-    where
-    join :: IDD -> IDD -> Maybe IDD
-    join (Leaf True) b = Just b
-    join a@(Leaf False) _ = Just a
-    join a (Leaf True) = Just a
-    join _ b@(Leaf False) = Just b
-    join a b | a == b = Just a
-    join _ _ = Nothing
+(.&&.) = apply True joinAnd
+
+-- | Short-circuit cases for conjunction.
+joinAnd :: IDD -> IDD -> Maybe IDD
+joinAnd (Leaf True) b = Just b
+joinAnd a@(Leaf False) _ = Just a
+joinAnd a (Leaf True) = Just a
+joinAnd _ b@(Leaf False) = Just b
+joinAnd a b | a == b = Just a
+joinAnd _ _ = Nothing
     
 -- | Disjunction of two boolean function
 (.||.) :: IDD -> IDD -> IDD
-(.||.) = apply True join
-    where
-    join :: IDD -> IDD -> Maybe IDD
-    join a@(Leaf True) _ = Just a
-    join (Leaf False) b = Just b
-    join _ b@(Leaf True) = Just b
-    join a (Leaf False) = Just a
-    join a b | a == b = Just a
-    join _ _ = Nothing
+(.||.) = apply True joinOr
+
+-- | Short-circuit cases for disjunction.
+joinOr :: IDD -> IDD -> Maybe IDD
+joinOr a@(Leaf True) _ = Just a
+joinOr (Leaf False) b = Just b
+joinOr _ b@(Leaf True) = Just b
+joinOr a (Leaf False) = Just a
+joinOr a b | a == b = Just a
+joinOr _ _ = Nothing
 
 -- | Implication
 (.=>.) :: IDD -> IDD -> IDD
@@ -243,24 +313,25 @@ mkApplyOp isCommutative func = do
     f a b | a == b = Just (Leaf True)
     f _ _ = Nothing
 
--- | Conjunction of a list of IDDs.
+-- | Conjunction of a list of IDDs (one shared apply-cache across the fold).
 and :: Foldable.Foldable f => f IDD -> IDD
-and es = Foldable.foldl (.&&.) true es
+and es = runST $ mkApplyOp True joinAnd >>= \op -> Foldable.foldlM op true es
 
--- | Disjunction of a list of IDDs.
+-- | Disjunction of a list of IDDs (one shared apply-cache across the fold).
 or :: Foldable.Foldable f => f IDD -> IDD
-or es = Foldable.foldl (.||.) false es
+or es = runST $ mkApplyOp True joinOr >>= \op -> Foldable.foldlM op false es
 
 ------------------------------------------------------------------------
 
 -- | Fold over the graph structure of the IDD.
-
+--
 -- It takes two functions that substitute 'Branch'  and 'Leaf' respectively.
 
 -- Note that its type is isomorphic to @('Sig' b -> b) -> IDD -> b@.
 fold :: (Int -> Vector b -> b) -> (Bool -> b) -> IDD -> b
 fold br lf (IDD node) = Node.fold br lf node
 
+-- | Monadic version of 'fold'.
 foldM :: Monad m => (Int -> Vector b -> m b) -> (Bool -> m b) -> IDD -> m b
 foldM br lf = fold (\i ms -> V.sequence ms >>= br i) lf
 
@@ -268,20 +339,25 @@ foldM br lf = fold (\i ms -> V.sequence ms >>= br i) lf
 fold' :: (Int -> Vector b -> b) -> (Bool -> b) -> IDD -> b
 fold' br lf (IDD node) = Node.fold' br lf node
 
+-- | Monadic version of 'fold''.
 foldM' :: Monad m => (Int -> Vector b -> m b) -> (Bool -> m b) -> IDD -> m b
 foldM' bf lf = fold' (\i ms -> V.sequence ms >>= bf i) lf
 
+-- | Build a strict memoising fold over an IDD.
 mkFold'Op :: (Int -> Vector b -> b) -> (Bool -> b) -> ST s (IDD -> ST s b)
 mkFold'Op br lf = do
   op <- Node.mkFold'Op br lf
   return $ \(IDD node) -> op node
 
+-- | Fold an IDD top-down, combining leaf values.
 accum :: Monoid b => (a -> Int -> Vector a) -> (a -> Bool -> b) -> a -> IDD -> b
 accum br lf z (IDD node) = Node.accum br lf z node
 
+-- | CPS version of a memoising fold over an IDD.
 foldCPS :: (Int -> Vector b -> b) -> (Bool -> b) -> (b -> r) -> IDD -> r
 foldCPS br lf k (IDD node) = Node.foldCPS br lf k node
 
+-- | Monadic version of 'foldCPS'.
 foldCPSM :: Monad m => (Int -> Vector b -> m b) -> (Bool -> m b) -> (b -> m r) -> IDD -> m r
 foldCPSM br lf k (IDD node) = Node.foldCPS (\i ms -> V.sequence ms >>= br i) lf (\mb -> mb >>= k) node
 
@@ -325,12 +401,105 @@ unfoldOrd f b = m2 Map.! b
 
 ------------------------------------------------------------------------
 
+-- | Rename support.
+renameSet :: IntMap Int -> IDD -> IDD
+renameSet m idd = runST $ do
+    h <- C.newSized defaultTableSize
+    let f n@(Leaf _) = return n
+        f n@(Branch x bs) = do
+            hit <- H.lookup h (nodeId n)
+            case hit of
+              Just y -> return y
+              Nothing -> do
+                bs' <- V.mapM f bs
+                let r = Branch (IntMap.findWithDefault x x m) bs'
+                H.insert h (nodeId n) r
+                return r
+    f idd
+
+-- | Existential quantification over a set of variables.
+existsSet :: IntSet -> IDD -> IDD
+existsSet vars idd = runST $ mkQuantOp (.||.) vars idd
+
+-- | Universal quantification over a set of variables.
+forAllSet :: IntSet -> IDD -> IDD
+forAllSet vars idd = runST $ mkQuantOp (.&&.) vars idd
+
+-- | Fused relational product @exists vars. (a AND b)@.
+andExistsSet :: IntSet -> IDD -> IDD -> IDD
+andExistsSet vars a0 b0 = runST $ do
+    orOp <- mkApplyOp True joinOr       
+    hEx  <- C.newSized defaultTableSize
+    hAE  <- C.newSized defaultTableSize
+    let orFoldM = go (Leaf False)
+          where go acc [] = return acc
+                go acc _ | acc == Leaf True = return acc     -- short-circuit on true
+                go acc (mx : rest) = do { x <- mx; acc' <- orOp acc x; go acc' rest }
+    let ex n@(Leaf _) = return n
+        ex n@(Branch x bs) = do
+            m <- H.lookup hEx (nodeId n)
+            case m of
+              Just y -> return y
+              Nothing -> do
+                r <- if IntSet.member x vars
+                       then orFoldM (map ex (V.toList bs))
+                       else Branch x <$> traverse ex bs
+                H.insert hEx (nodeId n) r
+                return r
+    let f (Leaf False) _ = return (Leaf False)
+        f _ (Leaf False) = return (Leaf False)
+        f (Leaf True) b = ex b
+        f a (Leaf True) = ex a
+        f a b | a == b = ex a
+        f n1 n2 = do
+            let key = if nodeId n2 < nodeId n1 then (n2, n1) else (n1, n2)   -- AND is commutative
+            m <- H.lookup hAE key
+            case m of
+              Just y -> return y
+              Nothing -> do
+                r <- case ddCase2 n1 n2 of
+                 IDDCase2GT x2 bs2
+                     | IntSet.member x2 vars -> orFoldM (map (f n1) (V.toList bs2))
+                     | otherwise -> Branch x2 <$> traverse (f n1) bs2
+                 IDDCase2LT x1 bs1
+                     | IntSet.member x1 vars -> orFoldM (map (flip f n2) (V.toList bs1))
+                     | otherwise -> Branch x1 <$> traverse (flip f n2) bs1
+                 IDDCase2EQ x bs1 bs2
+                     | IntSet.member x vars -> orFoldM (V.toList (V.zipWith f bs1 bs2))
+                     | otherwise -> Branch x <$> V.zipWithM f bs1 bs2
+                 IDDCase2EQ2 _ _ -> error "andExistsSet: should not happen"
+                H.insert hAE key r
+                return r
+    f a0 b0
+
+-- | Shared skeleton for existsSet/forAllSet.
+mkQuantOp :: forall s. (IDD -> IDD -> IDD) -> IntSet -> IDD -> ST s IDD
+mkQuantOp op vars idd = do
+    h <- C.newSized defaultTableSize
+    let f n@(Leaf _) = return n
+        f n@(Branch x bs) = do
+            m <- H.lookup h (nodeId n)
+            case m of
+                Just y -> return y
+                Nothing -> do
+                    bs' <- V.mapM f bs
+                    let ret | IntSet.member x vars = V.foldl1' op bs'
+                            | otherwise            = Branch x bs'
+                    H.insert h (nodeId n) ret
+                    return ret
+    f idd
+
+-- | Number of distinct nodes in the diagram.
+numNodes :: IDD -> Int
+numNodes = Node.numNodes . unIDD
+
 -- | All the variables that this IDD depends on.
 support :: IDD -> IntSet
 support bdd = runST $ do
   op <- mkSupportOp
   op bdd
 
+-- | Build the ST operation underlying 'support'.
 mkSupportOp :: ST s (IDD -> ST s IntSet)
 mkSupportOp = mkFold'Op f g
   where
@@ -348,22 +517,42 @@ evaluate f = g
 
 -- ------------------------------------------------------------------------
 
+-- | Enumerate the satisfying partial assignments by DIRECT DFS, output-sensitively.
+findSatDFS :: IDD -> [IntMap Int]
+findSatDFS = findSatDFSWith (\_ i -> i)
+
+-- | 'findSatDFS' applying @conv var childIndex@ to each entry as it is inserted.
+findSatDFSWith :: (Int -> Int -> Int) -> IDD -> [IntMap Int]
+findSatDFSWith conv idd0 = go idd0 IntMap.empty []
+  where
+    go (Leaf b) acc rest = if b then acc : rest else rest
+    go (Branch x cs) acc rest =
+        V.ifoldr (\i c r -> case c of
+                              Leaf False -> r
+                              _ -> go c (IntMap.insert x (conv x i) acc) r) rest cs
+
+-- | The memoising fold variant of 'findSatDFS'.
 findSatM :: IDD -> [IntMap Int]
 findSatM = foldCPS f g id
   where
     f x cs = msum (V.imap (\i c -> IntMap.insert x i <$> c) cs)
     g b = if b then return IntMap.empty else mzero
 
--- | Find one satisfying partial assignment
+-- | Find one satisfying partial assignment.
 anySat :: IDD -> Maybe (IntMap Int)
-anySat = headMay . findSatM
+anySat = headMay . findSatDFS
 
--- | Enumerate all satisfying partial assignments
+-- | Enumerate all satisfying partial assignments.
 allSat :: IDD -> [IntMap Int]
-allSat = findSatM
+allSat = findSatDFS
 
+-- | 'allSat' with the index->value conversion fused in.
+allSatWith :: (Int -> Int -> Int) -> IDD -> [IntMap Int]
+allSatWith = findSatDFSWith
+
+-- | Expand partial assignments to complete ones.
 findSatCompleteM :: IntMap Int -> IDD -> [IntMap Int]
-findSatCompleteM sizes bdd = expandPartial =<< findSatM bdd
+findSatCompleteM sizes bdd = expandPartial =<< findSatDFS bdd
     where
     expandPartial :: IntMap Int -> [IntMap Int]
     expandPartial vs = IntMap.mergeA missL missR matchLR vs sizes
@@ -373,7 +562,7 @@ findSatCompleteM sizes bdd = expandPartial =<< findSatM bdd
         matchLR = IntMap.zipWithAMatched (\k x sz -> [x])
     
 -- | Find one satisfying (complete) assignment over a given set of variables
-
+--
 -- The set of variables must be a superset of 'support'.
 anySatComplete :: IntMap Int -> IDD -> Maybe (IntMap Int)
 anySatComplete is = headMay . findSatCompleteM is

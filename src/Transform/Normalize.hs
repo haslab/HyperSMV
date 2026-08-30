@@ -1,18 +1,15 @@
+-- | Normalizes Pexpr/LTL formulas and selects atomisation strategies.
 module Transform.Normalize where
 
-import Data.Set(Set(..))
-import qualified Data.Set as Set
-import Data.HashSet(HashSet(..))
 import qualified Data.HashSet as HashSet
-import qualified Data.IntSet as IntSet
 import Data.List as List
 
 import Utils
 import Smv.Syntax
-import Smv.Pretty
 import Smv.Typing
 import Transform.Pexpr
 
+-- | Hoists nested 'next' operators to an outer wrapping.
 outerNext :: Pexpr -> Pexpr
 outerNext e = mknext (go e)
     where
@@ -37,7 +34,6 @@ outerNext e = mknext (go e)
         let rs = map go es in
         let (es',isNexts) = unzip rs in
         if all id isNexts then (Peopn o es',True) else (Peopn o $ map mknext rs,False)
---    go e@(Peproj {}) = (e,False)
     go e@(Pecase cs) =
         let (ls,rs) = unzip $ map (id >< go) cs in
         let (es,isNexts) = unzip rs in
@@ -51,11 +47,13 @@ outerNext e = mknext (go e)
 normalizeExpr :: Pexpr -> Pexpr
 normalizeExpr = evaluateExpr . nnfExpr . unfoldExpr . innerNext
 
+-- | Normalizes every LTL expression in a formula.
 normalizeFormula :: Pformula -> Pformula
 normalizeFormula (Pfforall n f) = Pfforall n $ normalizeFormula f
 normalizeFormula (Pfexists n f) = Pfexists n $ normalizeFormula f
 normalizeFormula (Pfltl e) = Pfltl $ normalizeExpr e
 
+-- | Pushes a 'next' operator inward through an expression.
 innerNext :: Pexpr -> Pexpr
 innerNext (vnext -> Just e@(Pebool {})) = e
 innerNext (vnext -> Just e@(Peint {})) = e
@@ -73,6 +71,7 @@ innerNext (Peopn o es) = Peopn o (map innerNext es)
 innerNext (Pecase cs) = Pecase $ map (id >< innerNext) cs
 innerNext (Pedemorgan c e1 e2) = Pedemorgan c (innerNext e1) (innerNext e2)
 
+-- | Rewrites derived operators into core expression forms.
 unfoldExpr :: Pexpr -> Pexpr
 unfoldExpr (Peop2 Pimplies e1 e2) = unfoldExpr $ unfoldImplies e1 e2
 unfoldExpr (Peop2 Pin e1 (vset -> Just is)) | List.null is = Pebool False
@@ -83,7 +82,7 @@ unfoldExpr (Peop2 Pin e1 (vsetbool -> Just bs)) = case HashSet.size bs of
     1 -> if popHashSet bs then unfoldExpr e1 else unfoldExpr (pnot e1) 
     2 -> Pebool True
 unfoldExpr (Peop2 Pin e1@(vcase -> Just cs1) (vset -> Just is)) = unfoldExpr $ pors $ map (Peop2 Peq e1) is
-unfoldExpr (Peop2 Peq e1 e2) | isBoolExpr e1 && isBoolExpr e2 = unfoldExpr $ Peop2 Pequiv e1 e2 --unfoldExpr $ (e1 `pand` e2) `por` (pnot e1 `pand` pnot e2)
+unfoldExpr (Peop2 Peq e1 e2) | isBoolExpr e1 && isBoolExpr e2 = unfoldExpr $ Peop2 Pequiv e1 e2 
 unfoldExpr e@(Pebool {}) = e
 unfoldExpr e@(Peint {}) = e
 unfoldExpr e@(Peident {}) = e
@@ -100,13 +99,16 @@ unfoldExpr (Pedemorgan c te fe) = unfoldExpr $ Pecase [(c,te),(pnot c,fe)]
 unfoldEquiv e1 e2 = (e1 `pand` e2) `por` (pnot e1 `pand` pnot e2)
 unfoldImplies e1 e2 = pnot e1 `por` e2
 
+-- | Flattens nested set unions into a flat list.
 joinUnions :: [Pexpr] -> [Pexpr]
 joinUnions [] = []
 joinUnions (Peop2 Punion x1 x2:xs) = joinUnions (x1 : x2 : xs)
 joinUnions (x:xs) = x : joinUnions xs
 
+-- | Converts an expression to negation normal form.
 nnfExpr :: Pexpr -> Pexpr    
 nnfExpr (Peop1 Patom e) | isConstantExpr e = e
+nnfExpr e@(vnot -> Just (Peop1 Patom _)) = e
 nnfExpr (vnotnot -> Just e) = nnfExpr e
 nnfExpr (vnotors -> Just es) = pands $ map (nnfExpr . pnot) es
 nnfExpr (vnotands -> Just es) = pors $ map (nnfExpr . pnot) es
@@ -131,9 +133,13 @@ nnfExpr e@(Peop2 o e1 (Pecase cs2)) | isBoolExpr e = nnfExpr $ fst $ foldl caseO
     where caseOp (acc,pre) (c2,e2) = (por acc $ pands $ [pnot pre,c2,peop2 o e1 e2],por pre c2)
 nnfExpr e@(Peop2 o (Pecase cs1) e2) | isBoolExpr e = nnfExpr $ fst $ foldl caseOp (pfalse,pfalse) cs1
     where caseOp (acc,pre) (c1,e1) = (por acc $ pands $ [pnot pre,c1,peop2 o e1 e2],por pre c1)
---nnfExpr (Peop2 Pimplies e1 e2) | breakImplies = nnfExpr $ pnot e1 `por` e2
---nnfExpr (Peop2 Pequiv e1 e2) | breakEquiv = nnfExpr $ (e1 `pand` e2) `por` (pnot e1 `pand` pnot e2)
-nnfExpr (Peop2 Peq e1@(isBoolExpr -> True) e2@(isBoolExpr -> True)) = nnfExpr $ peop2 Pequiv e1 e2 --nnfExpr $ (e1 `pand` e2) `por` (pnot e1 `pand` pnot e2)
+nnfExpr e@(Peop2 o e1 e2) | isBoolExpr e, Just (cs, rebuild) <- findArithCase e2 =
+    let step (acc,pre) (c,b) = (por acc $ pands [pnot pre,c,peop2 o e1 (rebuild b)],por pre c)
+    in nnfExpr $ fst $ foldl step (pfalse,pfalse) cs
+nnfExpr e@(Peop2 o e1 e2) | isBoolExpr e, Just (cs, rebuild) <- findArithCase e1 =
+    let step (acc,pre) (c,b) = (por acc $ pands [pnot pre,c,peop2 o (rebuild b) e2],por pre c)
+    in nnfExpr $ fst $ foldl step (pfalse,pfalse) cs
+nnfExpr (Peop2 Peq e1@(isBoolExpr -> True) e2@(isBoolExpr -> True)) = nnfExpr $ peop2 Pequiv e1 e2 
 nnfExpr (Peop2 Pimplies (Pebool True) e2) = nnfExpr e2
 nnfExpr (Peop2 Pimplies e1 (Pebool False)) = nnfExpr $ pnot e1
 nnfExpr (Peop2 Pequiv e1 (Pebool False)) = nnfExpr $ pnot e1
@@ -150,6 +156,16 @@ nnfExpr (Peopn o es) = peopn o $ map nnfExpr es
 nnfExpr (Pecase cs) = Pecase $ map (\(x,y) -> (nnfExpr x,nnfExpr y)) cs
 nnfExpr (Pedemorgan c e1 e2) = Pecase [(nnfExpr c,nnfExpr e1),(ptrue,nnfExpr e2)]
 
+-- | The outermost @case@ nested inside an arithmetic expression, with the context needed to rebuild the surrounding expression around a chosen branch.
+findArithCase :: Pexpr -> Maybe ([(Pexpr,Pexpr)], Pexpr -> Pexpr)
+findArithCase (Pecase cs) = Just (cs, id)
+findArithCase (Peop2 o e1 e2) | isArithOp2 o =
+    case findArithCase e1 of
+        Just (cs,k) -> Just (cs, \x -> Peop2 o (k x) e2)
+        Nothing     -> fmap (\(cs,k) -> (cs, \x -> Peop2 o e1 (k x))) (findArithCase e2)
+findArithCase _ = Nothing
+
+-- | Checks whether an expression contains a declared atom.
 hasAtomic :: Pexpr -> Bool
 hasAtomic (Pebool {}) = False
 hasAtomic (Peint {}) = False
@@ -158,30 +174,69 @@ hasAtomic (Peop1 Patom e) = True
 hasAtomic (Peop1 o e1) = hasAtomic e1
 hasAtomic (Peop2 o e1 e2) = hasAtomic e1 || hasAtomic e2
 hasAtomic (Peopn o es) = any hasAtomic es
---hasAtomic (Peproj n es t) = any hasAtomic es
 hasAtomic (Pecase cs) = any (\(x,y) -> hasAtomic x || hasAtomic y) cs
 hasAtomic (Pedemorgan c e1 e2) = hasAtomic c || hasAtomic e1 || hasAtomic e2
 
+-- | Wraps each minimal boolean subexpression in an atom.
 atomifyExpr :: Pexpr -> Pexpr
 atomifyExpr e@(Pebool {}) = e
 atomifyExpr e@(Peint {}) = e
---atomifyExpr e | not (isLTLExpr e) = patom e
 atomifyExpr e@(Peident {}) | isBoolExpr e = patom e
 atomifyExpr e@(Peop1 Patom e1) = patom e1 -- to normalize eventually multiple clustered atoms
 atomifyExpr (Peop1 o1 e1) = Peop1 o1 (atomifyExpr e1)
 atomifyExpr e@(Peop2 o2 e1 e2) | isCmpOp2 o2 && not (hasAtomic e) && not (isLTLExpr e) = patom e
 atomifyExpr (Peop2 o2 e1 e2) = Peop2 o2 (atomifyExpr e1) (atomifyExpr e2)
 atomifyExpr (Peopn on es) = Peopn on $ map atomifyExpr es
---atomifyExpr (Peproj n es t) = Peproj n (map atomifyExpr es) t
 atomifyExpr (Pecase cs) = Pecase $ map (atomifyExpr >< atomifyExpr) cs
 atomifyExpr (Pedemorgan c e1 e2) = Pedemorgan (atomifyExpr c) (atomifyExpr e1) (atomifyExpr e2)
 atomifyExpr e = error $ "cannot atomifyExpr " ++ show e
 
+-- | Number of identifier occurrences an expression would bury inside one opaque atom.
+atomIdents :: Pexpr -> Int
+atomIdents (Pebool {}) = 0
+atomIdents (Peint {}) = 0
+atomIdents (Peident {}) = 1
+atomIdents (Peop1 _ e1) = atomIdents e1
+atomIdents (Peop2 _ e1 e2) = atomIdents e1 + atomIdents e2
+atomIdents (Peopn _ es) = sum (map atomIdents es)
+atomIdents (Pecase cs) = sum (map (\(c,e) -> atomIdents c + atomIdents e) cs)
+atomIdents (Pedemorgan c e1 e2) = atomIdents c + atomIdents e1 + atomIdents e2
+atomIdents _ = 1
+
+-- | Above this, the whole formula is atomised finely instead of coarsely.
+maxAtomIdents :: Int
+maxAtomIdents = 47
+
+-- | Turn a coarse atomisation into the fine one, in place.
+refineAtoms :: Pexpr -> Pexpr
+refineAtoms (Peop1 Patom e) = atomifyExpr e
+refineAtoms e@(Pebool {}) = e
+refineAtoms e@(Peint {}) = e
+refineAtoms e@(Peident {}) = e
+refineAtoms (Peop1 o e) = Peop1 o (refineAtoms e)
+refineAtoms (Peop2 o e1 e2) = Peop2 o (refineAtoms e1) (refineAtoms e2)
+refineAtoms (Peopn o es) = Peopn o (map refineAtoms es)
+refineAtoms (Pecase cs) = Pecase (map (refineAtoms >< refineAtoms) cs)
+refineAtoms (Pedemorgan c e1 e2) = Pedemorgan (refineAtoms c) (refineAtoms e1) (refineAtoms e2)
+refineAtoms e = e
+
+-- | Largest atom (in identifier occurrences) anywhere in an already-atomised expression.
+maxAtomIdentsOf :: Pexpr -> Int
+maxAtomIdentsOf (Peop1 Patom e1) = atomIdents e1
+maxAtomIdentsOf (Peop1 _ e1) = maxAtomIdentsOf e1
+maxAtomIdentsOf (Peop2 _ e1 e2) = max (maxAtomIdentsOf e1) (maxAtomIdentsOf e2)
+maxAtomIdentsOf (Peopn _ es) = maximum (0 : map maxAtomIdentsOf es)
+maxAtomIdentsOf (Pecase cs) = maximum (0 : map (\(c,e) -> max (maxAtomIdentsOf c) (maxAtomIdentsOf e)) cs)
+maxAtomIdentsOf (Pedemorgan c e1 e2) = maximum [maxAtomIdentsOf c, maxAtomIdentsOf e1, maxAtomIdentsOf e2]
+maxAtomIdentsOf _ = 0
+
+-- | Applies 'atomifyExpr' to a formula's LTL body.
 atomifyFormula :: Pformula -> Pformula
 atomifyFormula (Pfexists n f) = Pfexists n $ atomifyFormula f
 atomifyFormula (Pfforall n f) = Pfforall n $ atomifyFormula f
 atomifyFormula (Pfltl e) = Pfltl $ atomifyExpr e
 
+-- | Ensures every boolean subexpression carries an atom marker.
 ensurePatom :: Pexpr -> Pexpr
 ensurePatom e@(Pebool {}) = e
 ensurePatom e@(Peint {}) = e
@@ -192,16 +247,19 @@ ensurePatom e@(Peop2 o2 e1 e2) | isBoolExpr e = if hasAtomic e then peop2 o2 (en
 ensurePatom e@(Peopn on es) | isBoolExpr e = if hasAtomic e then peopn on (map ensurePatom es) else patom e
 ensurePatom e = error $ "ensurePatom: " ++ show e
 
+-- | Wraps an expression in a single atom marker.
 patom :: Pexpr -> Pexpr
 patom e@(Pebool {}) = e
 patom e@(Peint {}) = e
 patom e = Peop1 Patom (noatom e)
 
+-- | Wraps an expression in an atom marker without stripping nested atoms.
 patomUnsafe :: Pexpr -> Pexpr
 patomUnsafe e@(Pebool {}) = e
 patomUnsafe e@(Peint {}) = e
 patomUnsafe e = Peop1 Patom e
 
+-- | Strips atom markers from an expression.
 noatom :: Pexpr -> Pexpr
 noatom e@(Pebool {}) = e
 noatom e@(Peint {}) = e
@@ -216,6 +274,7 @@ noatom e@(Pecase cs) = Pecase $ map (noatom >< noatom) cs
 noatom e@(Pedemorgan c e1 e2) = Pedemorgan (noatom c) (noatom e1) (noatom e2)
 noatom e = error $ "noatom: " ++ show e
 
+-- | Constant-folds and simplifies an expression.
 evaluateExpr :: Pexpr -> Pexpr
 evaluateExpr (Peop1 o e1) =
     case (o,evaluateExpr e1) of
@@ -230,6 +289,9 @@ evaluateExpr (Peop2 o e1 e2) =
         (Pequiv,e1,Pebool True) -> e1
         (Pequiv,Pebool False,e2) -> nnfExpr $ pnot e1
         (Pequiv,Pebool True,e2) -> e2
+        (Pplus,Peint i,Peint j) -> Peint (i+j)
+        (Pminus,Peint i,Peint j) -> Peint (i-j)
+        (Ptimes,Peint i,Peint j) -> Peint (i*j)
         (Peq,Peint i,Peint j) -> Pebool (i==j)
         (Pneq,Peint i,Peint j) -> Pebool (i/=j)
         (Pgt,Peint i,Peint j) -> Pebool (i>j)
@@ -243,6 +305,10 @@ evaluateExpr e@(Peint _) = e
 evaluateExpr (Peopn Pand es) = pands (map evaluateExpr es)
 evaluateExpr (Peopn Por es) = pors (map evaluateExpr es)
 evaluateExpr (Peopn Pset es) = pset (map evaluateExpr es)
-evaluateExpr (Pecase cs) = Pecase $ map (evaluateExpr >< evaluateExpr) cs
+evaluateExpr (Pecase cs) = caseOf (map (evaluateExpr >< evaluateExpr) cs)
+  where
+    caseOf cs' = case dropWhile ((== Pebool False) . fst) cs' of
+                   ((Pebool True,v):_) -> v
+                   rest -> Pecase rest
 evaluateExpr (Pedemorgan (Pebool b) e1 e2) = if b then evaluateExpr e1 else evaluateExpr e2
 evaluateExpr e = e

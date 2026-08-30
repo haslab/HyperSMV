@@ -1,53 +1,23 @@
+-- | Product construction of explicit-state systems with NBAs.
 module ExplicitState.Product where
 
 import Data.Map (Map(..))
 import qualified Data.Map as Map
 import Data.IntMap (IntMap(..))
 import qualified Data.IntMap as IntMap
-import Data.IntSet (IntSet(..))
 import qualified Data.IntSet as IntSet
 import Data.Set (Set(..))
 import qualified Data.Set as Set
-import Data.HashSet (HashSet(..))
 import qualified Data.HashSet as HashSet
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as UV
 import Data.Hashable as Hashable
 
-import Error
 import Utils
 import Smv.Syntax
 import ExplicitState.Syntax
 
---productExplicitStateSystem :: (Ord a,Ord b) => ExplicitStateSystem na a -> ExplicitStateSystem nb b -> ExplicitStateSystem (Either na nb) (a,b)
---productExplicitStateSystem s1 s2 = ExplicitStateSystem vars2 inits2 states2
---    where
---    vars2 = V.map (Left >< id) (exp_vars s1) V.++ V.map (Right >< id) (exp_vars s2)
---    inits2 = setProduct (exp_inits s1) (exp_inits s2)
---    states2 = buildStates (Set.toList inits2) Map.empty
---    
---    --buildStates :: [(a,b)] -> Map (a,b) ([Either Int Bool],Set (a,b)) -> Map (a,b) ([Either Int Bool],Set (a,b))
---    buildStates [] acc = acc
---    buildStates (x@(i,j):xs) acc = case Map.lookup x acc of
---        Just _ -> buildStates xs acc
---        Nothing -> buildStates (Set.toList ijnexts ++ xs) (Map.insert x (ival UV.++ jval,ijnexts) acc)
---      where
---        Just (ival,inexts) = Map.lookup i (exp_states s1)
---        Just (jval,jnexts) = Map.lookup j (exp_states s2)
---        ijnexts = setProduct inexts jnexts
---
---productNExplicitStateSystem :: Ord a => [(String,ExplicitStateSystem Pident)] -> ExplicitStateSystem Pident [a]
---productNExplicitStateSystem = productNExplicitStateSystem' . map mk
---    where
---    mk :: Ord a => (String,ExplicitStateSystem Pident a) -> ExplicitStateSystem Pident [a]
---    mk (dim,s) = mapExplicitStateSystem (\n -> addDimPident n $ mkQuantDim dim) (:[]) s
---    
---    productNExplicitStateSystem' :: Ord a => [ExplicitStateSystem Pident [a]] -> ExplicitStateSystem Pident [a]
---    productNExplicitStateSystem' [x] = x
---    productNExplicitStateSystem' (x1:x2:xs) = productNExplicitStateSystem' (x12:xs)
---        where
---        x12 = mapExplicitStateSystem (either id id) (uncurry (++)) $ productExplicitStateSystem x1 x2
-
+-- | Product of several systems' states into one flat row set.
 productNExplicitStates :: (Hashable base,UV.Unbox base) => [(String,ExplicitStateSystem Pident base)] -> ExplicitStates Pident base
 productNExplicitStates exps = ExplicitStates varsN valuesN
     where
@@ -56,7 +26,6 @@ productNExplicitStates exps = ExplicitStates varsN valuesN
     initsN = intSetNProductHash $ map (exp_inits . snd) exps
     valuesN = buildValues initsN HashSet.empty HashSet.empty
     
---    buildValues :: HashSet [Int] -> HashSet [Int] -> HashSet (Values base) -> HashSet (Values base)
     buildValues xs dones acc = case isConsHashSet xs of
         Nothing -> acc
         Just (is,ys) -> if HashSet.member is dones
@@ -66,6 +35,7 @@ productNExplicitStates exps = ExplicitStates varsN valuesN
                      nexts = intSetNProductHash nextsN
                  in buildValues (ys `HashSet.union` nexts) (HashSet.insert is dones) (HashSet.insert vals acc)
         
+-- | Product of several systems' states into one sparse row set.
 productNExplicitStatesView :: (Hashable base,UV.Unbox base) => (String -> Int -> Int) -> [(String,ExplicitStateSystem Pident base)] -> ExplicitStatesView Pident base
 productNExplicitStatesView colMapper exps = ExplicitStatesView varsN valuesN
     where
@@ -74,7 +44,6 @@ productNExplicitStatesView colMapper exps = ExplicitStatesView varsN valuesN
     initsN = intSetNProductHash $ map (exp_inits . snd) exps
     valuesN = buildValuesView initsN HashSet.empty HashSet.empty
     
---    buildValuesView :: HashSet [Int] -> HashSet [Int] -> HashSet (ValuesView base) -> HashSet (ValuesView base)
     buildValuesView xs dones acc = case isConsHashSet xs of
         Nothing -> acc
         Just (is,ys) -> if HashSet.member is dones
@@ -84,44 +53,112 @@ productNExplicitStatesView colMapper exps = ExplicitStatesView varsN valuesN
                      nexts = intSetNProductHash nextsN
                  in buildValuesView (ys `HashSet.union` nexts) (HashSet.insert is dones) (HashSet.insert vals acc)
 
---    concatValuesToView :: [(String,Values base)] -> ValuesView base
     concatValuesToView = foldl go IntMap.empty
         where
         go (m) (s,vs) = (UV.ifoldl (\m i x -> IntMap.insert (colMapper s i) x m) m vs)
 
--- performs a filtering of the original explicit system using the NBA constraints
--- returns a subset of the original explicit system, with the same variables
-productExplicitStateSystemNBA :: ExplicitStateSystem n base -> ExplicitStateNBA base -> ExplicitStateSystem n base
-productExplicitStateSystemNBA sys nba = ExplicitStateSystem vars inits' accepting' states'
-    where
-    vars = exp_vars sys
-    inits = exp_inits sys
-    states = exp_states sys
-    inits2 = exp_nba_inits nba
-    trans2 = exp_nba_transitions nba
-    -- all new states in the product automaton
-    (_,newstates) = buildStates (Set.empty,IntMap.empty) (intSetProduct inits inits2) 
-    newstatesSet = IntMap.keysSet newstates
-    inits' = IntSet.intersection inits newstatesSet
-    states' = IntSet.foldl insert IntMap.empty newstatesSet
-    insert acc i = case IntMap.lookup i states of
-        Nothing -> acc
-        Just (vals,nexts) -> IntMap.insert i (vals,IntSet.intersection nexts newstatesSet) acc
-    newaccepts = IntMap.keysSet (IntMap.filter id newstates)
-    accepting' = if newaccepts == newstatesSet then Nothing else Just newaccepts
-    
-    buildStates :: (Set (Int,Int),IntMap IsAccepting) -> Set (Int,Int) -> (Set (Int,Int),IntMap IsAccepting)
-    buildStates = Set.foldl buildState
-    
-    buildState :: (Set (Int,Int),IntMap IsAccepting) -> (Int,Int) -> (Set (Int,Int),IntMap IsAccepting)
-    buildState acc@(dones,news) ij | Set.member ij dones = acc
-    buildState (dones,news) ij@(i,j) = case (IntMap.lookup i states,IntMap.lookup j trans2) of
-        (Just (vals_i,nexts_i),Just trans_j) -> 
-            let trans_j' = IntMap.filter ((\p -> p vals_i) . snd) trans_j
-                accept_i = isAcceptingExplicitState i sys && any fst trans_j
-            in buildStates (Set.insert ij dones,IntMap.insertWith (||) i accept_i news) (intSetProduct nexts_i (IntMap.keysSet trans_j'))
-        otherwise -> (dones,news)
-        
+-- | Exact restriction of an explicit system by an NBA.
+productExplicitStateSystemNBAExact :: ExplicitStateSystem n base -> ExplicitStateNBA base -> ExplicitStateSystem n base
+productExplicitStateSystemNBAExact sys nba =
+    case productExplicitStateSystemNBAExactBounded maxBound sys nba of
+        Just r -> r
+        Nothing -> error "productExplicitStateSystemNBAExact: budget maxBound cannot be exceeded"
 
-        
+-- | Exact restriction, giving up (returning 'Nothing') once the product exceeds @budget@ states.
+productExplicitStateSystemNBAExactBounded :: Int -> ExplicitStateSystem n base -> ExplicitStateNBA base -> Maybe (ExplicitStateSystem n base)
+productExplicitStateSystemNBAExactBounded budget sys nba = case reachWithin budget of
+    Nothing -> Nothing
+    Just _ -> Just (removeDeadlockExplicitStateSystem (ExplicitStateSystem (exp_vars sys) inits' accepting' states'))
+    where
+    states = exp_states sys
+    trans2 = exp_nba_transitions nba
+
+    flagBySource :: Bool
+    flagBySource = all ok (IntMap.elems states)
+        where
+        ok (vals_i,_) = all (agree . enabledFlags vals_i) (IntMap.elems trans2)
+        agree bs = case bs of { [] -> True ; (b:bs') -> all (== b) bs' }
+
+    enabledFlags :: Values base -> IntMap (IsAccepting,Values base -> Bool) -> [IsAccepting]
+    enabledFlags vals_i trans_j = [ acc | (acc,p) <- IntMap.elems trans_j, p vals_i ]
+
+    accAtSource :: Int -> Int -> Bool
+    accAtSource i j = case (IntMap.lookup i states, IntMap.lookup j trans2) of
+        (Just (vals_i,_), Just trans_j) -> case enabledFlags vals_i trans_j of
+            (b:_) -> b
+            []    -> False
+        _ -> False
+
+    hasSysAcc :: Bool
+    hasSysAcc = case exp_accepting sys of { Nothing -> False; Just _ -> True }
+
+    sysAccepting :: Int -> Bool
+    sysAccepting i = isAcceptingExplicitState i sys
+
+    starts :: [(Int,Int,Bool,Int)]
+    starts =
+        [ (i,j,False,0)
+        | i <- IntSet.toList (exp_inits sys)
+        , IntMap.member i states
+        , j <- IntSet.toList (exp_nba_inits nba)
+        ]
+
+    nbaAcc :: (Int,Int,Bool,Int) -> Bool
+    nbaAcc (i,j,b,_) = if flagBySource then accAtSource i j else b
+
+    succsOf :: (Int,Int,Bool,Int) -> [(Int,Int,Bool,Int)]
+    succsOf x@(i,j,_,ph) = case (IntMap.lookup i states,IntMap.lookup j trans2) of
+        (Just (vals_i,nexts_i),Just trans_j) ->
+            [ (i',j',flag',phase')
+            | (j',(acc,p)) <- IntMap.toList trans_j
+            , p vals_i -- only edges enabled by the CURRENT state's valuation
+            , i' <- IntSet.toList nexts_i
+            , IntMap.member i' states -- never emit a successor we cannot look up (no dangling ids)
+            , let flag' = if flagBySource then False else acc
+            , let phase' = nextPhase (i',j',flag',ph)
+            ]
+        _ -> []
+      where
+        nextPhase (i',j',flag',p0)
+            | not hasSysAcc = 0
+            | p0 == 0 = if sysAccepting i' then 1 else 0
+            | otherwise = if nbaAcc (i',j',flag',p0) then 0 else 1
+
+    reach :: Set (Int,Int,Bool,Int)
+    reach = maybe (go Set.empty starts) id (reachWithin maxBound)
+        where
+        go done [] = done
+        go done (x:xs)
+            | Set.member x done = go done xs
+            | otherwise = go (Set.insert x done) (succsOf x ++ xs)
+
+    reachWithin :: Int -> Maybe (Set (Int,Int,Bool,Int))
+    reachWithin budget = go Set.empty starts
+        where
+        go done [] = Just done
+        go done (x:xs)
+            | Set.member x done = go done xs
+            | Set.size done >= budget = Nothing
+            | otherwise = go (Set.insert x done) (succsOf x ++ xs)
+
+    ids :: Map (Int,Int,Bool,Int) Int
+    ids = Map.fromList $ zip (Set.toList reach) [0..]
+
+    idOf :: (Int,Int,Bool,Int) -> Int
+    idOf x = unsafeLookupNote "productExplicitStateSystemNBAExact" x ids
+
+    inits' = IntSet.fromList $ map idOf $ filter (`Set.member` reach) starts
+
+    states' = IntMap.fromList
+        [ (idOf x,(vals_i,IntSet.fromList $ map idOf $ succsOf x))
+        | x@(i,_,_,_) <- Set.toList reach
+        , Just (vals_i,_) <- [IntMap.lookup i states]
+        ]
+
+    accepts = IntSet.fromList
+        [ idOf x
+        | x@(_,_,_,ph) <- Set.toList reach
+        , if hasSysAcc then ph == 1 && nbaAcc x else nbaAcc x
+        ]
+    accepting' = if accepts == IntMap.keysSet states' then Nothing else Just accepts
 

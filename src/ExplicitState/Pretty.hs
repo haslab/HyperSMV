@@ -1,23 +1,18 @@
+-- | Pretty-printing explicit-state systems.
 module ExplicitState.Pretty where
 
-import Data.Set (Set(..))
-import qualified Data.Set as Set
-import Data.Map (Map(..))
-import qualified Data.Map as Map
-import Data.IntSet (IntSet(..))
 import qualified Data.IntSet as IntSet
-import Data.IntMap (IntMap(..))
 import qualified Data.IntMap as IntMap
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as UV
-
-import Utils
-import Pretty
 import Prettyprinter
+
+import Pretty
 import ExplicitState.Syntax
 import Smv.Typing
 import qualified Data.DD as DD
 
+-- | Render an explicit-state system in its text format.
 prettyExplicitStateSystem :: (DD.IsVal base,Pretty n) => ExplicitStateSystem n base -> Doc ann
 prettyExplicitStateSystem s = vcat $ header ++ pstates ++ footer
     where
