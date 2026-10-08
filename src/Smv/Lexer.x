@@ -32,6 +32,8 @@ $upper      = [A-Z]
 @idletter   = (@letter|_)
 @ident      = @idletter(@idletter|\-|\.|\#|$digit)*
 @int        = [\-]?($digit)+
+-- an indexed name with a dotted suffix, as nuXmv names the bits of an array element: items[0].0
+@bitident   = @ident (\[ @int \])+ \. (@idletter|$digit) (@idletter|\-|\.|\#|$digit|\[ @int \])*
 
 tokens :-
 
@@ -45,6 +47,7 @@ tokens :-
 <0>     "+"                                     { lexToken T_PLUS    }
 <0>     "-"                                     { lexToken T_MINUS    }
 <0>     "*"                                     { lexToken T_TIMES      }
+<0>     @bitident                               { lexTokenWith T_NID }
 <0>     @ident                                  { lexTokenWith (\s -> fromMaybe (T_NID s) $ Map.lookup s keywords) }
 <0>     "("                                     { lexToken T_LPAREN     }
 <0>     ")"                                     { lexToken T_RPAREN     }
@@ -69,6 +72,7 @@ tokens :-
 <0>     "<"                                    { lexToken T_LT   }
 <0>     ">"                                    { lexToken T_GT   }
 <0>     ".."                                    { lexToken T_RANGE }
+<0>     "."                                     { lexToken T_DOT }
 <0>     "?"                                    { lexToken T_QUESTION }
                                                 
 <0>     .                                       { \input@(_,_,s,_) len -> flip invalid_char s =<< l_of_lexbuf input }
@@ -195,6 +199,7 @@ data Token
     | T_GT
     | T_GEQ
     | T_RANGE  
+    | T_DOT
     
     | T_EOF
     deriving (Eq,Show)

@@ -264,6 +264,7 @@ foldBArith e = let e' = go e in if e' == e then Nothing else Just e'
     arith Pplus  = (+)
     arith Pminus = (-)
     arith Ptimes = (*)
+    arith Pmod   = rem
     arith o      = error $ "foldBArith: " ++ show o
 
 -- | The leftmost variable reachable through integer arithmetic, with the context to rebuild the surrounding expression around a chosen value. 

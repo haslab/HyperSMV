@@ -126,14 +126,13 @@ unpackPvars vs = map (\(n,t) -> Pvar n t) $ Map.toList vs
 
 -- | Pack a list of DEFINE entries into a 'PackedPdefs' map.
 packPdefines :: [Pdefine] -> PackedPdefs
-packPdefines ds = Map.fromList $ map (\(Pdefine n e) -> (Pident n [],e)) ds
+packPdefines ds = Map.fromList $ map (\(Pdefine n e) -> (n,e)) ds
 
 -- | Unpack a 'PackedPdefs' map into DEFINE entries.
 unpackPdefines :: PackedPdefs -> [Pdefine]
 unpackPdefines ds = map unIdent $ Map.toList ds
     where
-    unIdent ((Pident n []),e) = (Pdefine n e)
-    unIdent (n,e) = error $ "unpackPdefines: " ++ show n
+    unIdent (n,e) = Pdefine n e
 
 -- | Pack a list of ASSIGN entries into a 'PackedPassigns'.
 packPassigns :: Monad m => [Passign] -> m PackedPassigns

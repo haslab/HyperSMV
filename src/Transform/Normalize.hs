@@ -292,6 +292,7 @@ evaluateExpr (Peop2 o e1 e2) =
         (Pplus,Peint i,Peint j) -> Peint (i+j)
         (Pminus,Peint i,Peint j) -> Peint (i-j)
         (Ptimes,Peint i,Peint j) -> Peint (i*j)
+        (Pmod,Peint i,Peint j) | j /= 0 -> Peint (i `rem` j)
         (Peq,Peint i,Peint j) -> Pebool (i==j)
         (Pneq,Peint i,Peint j) -> Pebool (i/=j)
         (Pgt,Peint i,Peint j) -> Pebool (i>j)

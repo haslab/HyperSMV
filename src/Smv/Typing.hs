@@ -193,6 +193,7 @@ typecheckPop2 Pequiv t1 t2 | typecheckAll EBool [t1,t2] = EBool
 typecheckPop2 Pplus t1 t2 | typecheckAll EInt [t1,t2] = EInt
 typecheckPop2 Pminus t1 t2 | typecheckAll EInt [t1,t2] = EInt
 typecheckPop2 Ptimes t1 t2 | typecheckAll EInt [t1,t2] = EInt
+typecheckPop2 Pmod t1 t2 | typecheckAll EInt [t1,t2] = EInt
 typecheckPop2 Pimplies t1 t2 | typecheckAll EBool [t1,t2] = EBool
 typecheckPop2 Punion t1 t2 | typecheck2 t1 t2 = t1
 typecheckPop2 Peq t1 t2 | typecheck2 t1 t2 = EBool
@@ -212,6 +213,7 @@ typeOfPop2 Pequiv t1 t2 = EBool
 typeOfPop2 Pplus t1 t2 = EInt
 typeOfPop2 Pminus t1 t2 = EInt
 typeOfPop2 Ptimes t1 t2 = EInt
+typeOfPop2 Pmod t1 t2 = EInt
 typeOfPop2 Pimplies t1 t2 = EBool
 typeOfPop2 Punion t1 t2 = t1
 typeOfPop2 Peq t1 t2 = EBool
@@ -247,6 +249,7 @@ varTypeOfPop2 Pin t1 t2 = VBool
 varTypeOfPop2 Pplus (VInt is) (VInt js) = VInt $ IntSet.fromList [ i + j | i <- IntSet.toList is, j <- IntSet.toList js ]
 varTypeOfPop2 Pminus (VInt is) (VInt js) = VInt $ IntSet.fromList [ i - j | i <- IntSet.toList is, j <- IntSet.toList js ]
 varTypeOfPop2 Ptimes (VInt is) (VInt js) = VInt $ IntSet.fromList [ i * j | i <- IntSet.toList is, j <- IntSet.toList js ]
+varTypeOfPop2 Pmod (VInt is) (VInt js) = VInt $ IntSet.fromList [ i `rem` j | i <- IntSet.toList is, j <- IntSet.toList js, j /= 0 ]
 varTypeOfPop2 o t1 t2 = error $ "varTypeOfPop2: " ++ prettyprint o ++ " " ++ show t1 ++ " " ++ show t2
 
 -- | Whether an expression's type is boolean.

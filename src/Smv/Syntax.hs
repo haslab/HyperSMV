@@ -58,7 +58,7 @@ data Pvar = Pvar { pvar_name :: Pident, pvar_type :: Ptype }
     deriving (Eq,Ord,Show)
 
 -- | A DEFINE entry: name bound to an expression.
-data Pdefine = Pdefine { pdef_lhs :: String, pdef_rhs :: Pexpr }
+data Pdefine = Pdefine { pdef_lhs :: Pident, pdef_rhs :: Pexpr }
     deriving (Eq,Ord,Show)
 
 -- | The n-ary operators: AND, OR, set.
@@ -66,7 +66,7 @@ data Popn = Pand | Por | Pset deriving (Eq,Ord,Show,Generic)
 -- | The unary operators.
 data Pop1 = Pnot | Pf | Pg | Px | Py | Pz | Ph | Pnext | Patom {-used only for autohyper formulas-} deriving (Eq,Ord,Show,Generic)
 -- | The binary operators.
-data Pop2 = Pin | Pequiv | Pimplies | Pplus | Pminus | Ptimes | Punion | Peq | Pneq | Plt | Pleq | Pgt | Pgeq | Pu | Pv deriving (Eq,Ord,Show,Generic)
+data Pop2 = Pin | Pequiv | Pimplies | Pplus | Pminus | Ptimes | Pmod | Punion | Peq | Pneq | Plt | Pleq | Pgt | Pgeq | Pu | Pv deriving (Eq,Ord,Show,Generic)
 
 instance Hashable Pop1
 instance Hashable Pop2
@@ -242,7 +242,7 @@ pijustice :: L.Located Pexpr -> Pitem
 pijustice e = Pijustice (unloc e)
     
 -- | Build a DEFINE item.
-pidefine :: [L.Located (String,Pexpr)] -> Pitem
+pidefine :: [L.Located (Pident,Pexpr)] -> Pitem
 pidefine xs = Pidefine (map pdefine xs)
     where pdefine l = let (x,y) = unloc l in mk_loc (loc l) (Pdefine x y)
     
@@ -338,7 +338,7 @@ isPidefine (Pidefine _) = True
 isPidefine _ = False
 
 -- | The name bound by a DEFINE entry.
-pdefineName :: Pdefine -> String
+pdefineName :: Pdefine -> Pident
 pdefineName (Pdefine n _) = n
 
 -- | Collect DEFINE entries from module items.
@@ -406,6 +406,7 @@ isArithOp2 :: Pop2 -> Bool
 isArithOp2 Pplus = True
 isArithOp2 Pminus = True
 isArithOp2 Ptimes = True
+isArithOp2 Pmod = True
 isArithOp2 _ = False
 
 -- | Whether an operator is a boolean connective.

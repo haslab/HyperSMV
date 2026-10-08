@@ -79,6 +79,8 @@ import Location as L
 %token TRANS            { Located _ L.T_TRANS }
 %token LTLSPEC          { Located _ L.T_LTLSPEC  }
 %token RANGE          { Located _ L.T_RANGE  }
+%token DOT            { Located _ L.T_DOT  }
+%token MOD            { Located _ L.T_MOD  }
 %token ARRAY          { Located _ L.T_ARRAY  }
 %token OF          { Located _ L.T_OF  }
 %token UNION          { Located _ L.T_UNION  }
@@ -97,7 +99,7 @@ import Location as L
 %nonassoc EQ NEQ LT LEQ GT GEQ
 %nonassoc U V
 %left IN
-%left PLUS MINUS TIMES UNION
+%left PLUS MINUS TIMES MOD UNION
 
 %%
 
@@ -156,6 +158,7 @@ penext :: { Pexpr -> Located Pexpr }
     | PLUS pexpr    { \e -> mk_loc (loc $1) (Peop2 Pplus e (unloc $2)) }
     | MINUS pexpr   { \e -> mk_loc (loc $1) (Peop2 Pminus e (unloc $2)) }
     | TIMES pexpr   { \e -> mk_loc (loc $1) (Peop2 Ptimes e (unloc $2)) }
+    | MOD pexpr     { \e -> mk_loc (loc $1) (Peop2 Pmod e (unloc $2)) }
     | UNION pexpr   { \e -> mk_loc (loc $1) (Peop2 Punion e (unloc $2)) }
     | IN pexpr      { \e -> mk_loc (loc $1) (Peop2 Pin e (unloc $2)) }
     | U pexpr       { \e -> mk_loc (loc $1) (Peop2 Pu e (unloc $2)) }
@@ -190,8 +193,8 @@ pjustice :: { Located Pexpr }
     : JUSTICE pexpr SEMICOLON { mk_loc (loc $1) (unloc $2) }
     | JUSTICE pexpr { mk_loc (loc $1) (unloc $2) }
     
-pdefine :: { Located (String,Pexpr) }
-    : ident ATTRIB pexpr SEMICOLON { mk_loc (loc $1) (unloc $1,unloc $3) }
+pdefine :: { Located (Pident,Pexpr) }
+    : pident ATTRIB pexpr SEMICOLON { mk_loc (loc $1) (unloc $1,unloc $3) }
 
 piassign :: { Located [Located Passign] }
     : ASSIGN list(passign) { mk_loc (loc $1) $2 }
@@ -242,6 +245,8 @@ pmodule :: { Located Pmodule }
 pformula :: { Located Pformula }
     : EXISTS ident pformula { mk_loc (loc $1) $ Pfexists (init $ unloc $2) (unloc $3) }
     | FORALL ident pformula { mk_loc (loc $1) $ Pfforall (init $ unloc $2) (unloc $3) }
+    | EXISTS ident DOT pformula { mk_loc (loc $1) $ Pfexists (unloc $2) (unloc $4) }
+    | FORALL ident DOT pformula { mk_loc (loc $1) $ Pfforall (unloc $2) (unloc $4) }
     | pexpr { lmap Pfltl $1 }
 
 --  * -------------------------------------------------------------------- *)

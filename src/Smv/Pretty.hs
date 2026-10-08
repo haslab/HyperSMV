@@ -62,7 +62,7 @@ ppDims m@(GenQBF Hyper) dims = hcat (map (\dim -> pretty "_" <> (ppClosedExpr m 
 ppDims m dims = hcat (map (\dim -> brackets (ppClosedExpr m False dim)) dims)
     
 instance SmvPretty Pdefine where
-    pp m (Pdefine l r) = ppName m l <+> pretty ":=" <+> pp m r <> pretty ';'
+    pp m (Pdefine l r) = pclose False (ppIdent m l) <+> pretty ":=" <+> pp m r <> pretty ';'
 
 instance SmvPretty Passign where
     pp m (Passign l r) = pp m l <+> pretty ":=" <+> pp m r <> pretty ';'
@@ -108,6 +108,7 @@ instance SmvPretty Pop2 where
     pp _ Pplus = pretty '+'
     pp _ Pminus = pretty '-'
     pp _ Ptimes = pretty '*'
+    pp _ Pmod = pretty "mod"
     pp _ Pleq = pretty "<="
     pp _ Plt = pretty "<"
     pp _ Pgeq = pretty ">="

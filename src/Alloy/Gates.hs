@@ -73,7 +73,7 @@ runAlloyM = fst . runAlloyM'
 runAlloyM' :: AlloyM a -> (a,AlloySt)
 runAlloyM' m = State.runState (unAlloyM m) st
     where
-    intOps = map (++intName) ["plus","minus","times","lt","leq","gt","geq","eq"]
+    intOps = map (++intName) ["plus","minus","times","rem","lt","leq","gt","geq","eq"]
     st = AlloySt
         { names_ = Map.fromList $ map (\x -> (Pident x [],(x,Nothing))) (["W","FSM","true","false",boolName,"T","F"]++[intName]++intOps++["_i1","_i2"])
         , imports_ = []
@@ -133,7 +133,8 @@ mkSigInt = do
     d6 <-  genArithDef  "plus"  (plusTT      is)
     d7 <-  genArithDef  "minus" (minusTT     is)
     d8 <-  genArithDef  "times" (timesTT     is)
-    return (asig:sigs:d1++d2++d3++d4++d5++d6++d7++d8) 
+    d9 <-  genArithDef  "rem"   (remTT       is)
+    return (asig:sigs:d1++d2++d3++d4++d5++d6++d7++d8++d9) 
 
 -- | A unique name for an integer set.
 mkIntName :: IntSet -> UniqueName
@@ -278,6 +279,10 @@ minusTT is = [ [_i1,_i2,_i3] | _i1 <- is, _i2 <- is, _i3 <- is, _i1 - _i2 == _i3
 -- | Truth table for integer multiplication.
 timesTT :: [Int] -> TT Int
 timesTT is = [ [_i1,_i2,_i3] | _i1 <- is, _i2 <- is, _i3 <- is, _i1 * _i2 == _i3 ]
+
+-- | Truth table for integer remainder (SMV mod).
+remTT :: [Int] -> TT Int
+remTT is = [ [_i1,_i2,_i3] | _i1 <- is, _i2 <- is, _i2 /= 0, _i3 <- is, _i1 `rem` _i2 == _i3 ]
 
 -- | Truth table for boolean or.
 orTT :: [Bool] -> TT Bool

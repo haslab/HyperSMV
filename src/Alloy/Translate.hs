@@ -341,6 +341,10 @@ valueMode2ToAlloy Ptimes e1 e2 = do
     e1' <- exprToAlloy (Value) e1
     e2' <- exprToAlloy (Value) e2
     getIntOp2 "times" e1' e2'
+valueMode2ToAlloy Pmod e1 e2 = do
+    e1' <- exprToAlloy (Value) e1
+    e2' <- exprToAlloy (Value) e2
+    getIntOp2 "rem" e1' e2'
 valueMode2ToAlloy Punion e1 e2 = do
     e1' <- exprToAlloy (Value) e1
     e2' <- exprToAlloy (Value) e2
